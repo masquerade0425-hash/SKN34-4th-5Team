@@ -8,7 +8,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useMemberAuth, type MemberUser } from "@/lib/member-auth";
 import { deleteRoute, retryRoutes, setRouteLike, useRoutes, useLikedRoutes, useRoutesError, useRoutesReady, type TripRoute } from "@/lib/routes";
 import { teamBoards } from "@/lib/team-community";
-import { memberRoleLabel, nextNicknameChangeAt } from "@/lib/member-policy";
+import { MEMBER_LEVELS, memberRoleLabel, nextNicknameChangeAt, type MemberLevel } from "@/lib/member-policy";
 import { updateMemberUser, type MemberUserUpdate } from "@/lib/api/auth";
 import { RouteCard } from "@/components/route-card";
 import { MemberPosts } from "@/components/member-posts";
@@ -17,11 +17,12 @@ import { logoutMember, memberError, memberFetch } from "@/lib/member-auth-reques
 import styles from "./page.module.css";
 
 type PointTransaction = { amount: number; transaction_type: string; description: string; created_at: string };
-type MemberPoints = { balance: number; transactions: PointTransaction[] };
+type MemberPoints = { balance: number; level: MemberLevel; transactions: PointTransaction[] };
 
 function isMemberPoints(value: unknown): value is MemberPoints {
   if (!value || typeof value !== "object" || !("balance" in value) || !("transactions" in value)) return false;
   return typeof value.balance === "number" && Number.isFinite(value.balance)
+    && "level" in value && (value.level === 1 || value.level === 2 || value.level === 3)
     && Array.isArray(value.transactions)
     && value.transactions.every(transaction =>
       transaction && typeof transaction === "object"
@@ -152,7 +153,7 @@ function MyPageContent() {
   const visible = tab === "likes" ? liked : own;
   return <main className={`container ${styles.page}`}>
     <p className="eyebrow">MY PAGE</p><h1>마이페이지</h1>
-    <section className={styles.profile} aria-label="내 프로필"><div className={styles.avatarWrap}><div className={styles.avatar} aria-hidden="true">{user.avatar ? <Image src={user.avatar} alt="" width={60} height={60} unoptimized /> : <Image src="/images/default-avatar.svg" alt="" width={60} height={60} />}</div>{team && <span className={styles.teamBadge} title={team.name}><Image src={`/images/teams/${team.code.toLowerCase()}.svg`} alt={`응원팀 ${team.name}`} width={22} height={22} /></span>}</div><div><h2 className={styles.memberName}>{displayName}님</h2><p>{memberRoleLabel(user)} · {team?.name ?? "응원팀 미설정"}</p></div><Link href="/routes/new" className="button button-primary">코스 만들기</Link></section>
+    <section className={styles.profile} aria-label="내 프로필"><div className={styles.avatarWrap}><div className={styles.avatar} aria-hidden="true">{user.avatar ? <Image src={user.avatar} alt="" width={60} height={60} unoptimized /> : <Image src="/images/default-avatar.svg" alt="" width={60} height={60} />}</div>{team && <span className={styles.teamBadge} title={team.name}><Image src={`/images/teams/${team.code.toLowerCase()}.svg`} alt={`응원팀 ${team.name}`} width={22} height={22} /></span>}</div><div><h2 className={styles.memberName}>{displayName}님</h2><div className={styles.memberRank}>{currentPointState.status === "loaded" ? <><Image src={MEMBER_LEVELS[currentPointState.points.level].image} alt="" width={44} height={44} className={styles.levelBadge} /><span>회원 등급 {MEMBER_LEVELS[currentPointState.points.level].label}<small>{currentPointState.points.balance.toLocaleString("ko-KR")}P</small></span></> : <span role="status">{currentPointState.status === "loading" ? "등급 확인 중…" : "등급을 불러오지 못했어요."}</span>}{currentPointState.status === "error" && <button type="button" onClick={() => { setPointState({ status: "loading", userId: user.id }); setPointReload(value => value + 1); }}>다시 확인</button>}</div><p>{memberRoleLabel(user)} · {team?.name ?? "응원팀 미설정"}</p></div><Link href="/routes/new" className="button button-primary">코스 만들기</Link></section>
     <p className={styles.note}>계정·프로필 설정은 서버에 저장돼요. 새 코스는 공개되며 편집 권한만 이 브라우저에 저장돼요. 이전 버전 코스는 다시 저장하기 전까지 이 브라우저에만 남아요.</p>
     {loadError && <p className={styles.note} role="alert">{loadError} 이전 버전 코스만 표시될 수 있어요. <button type="button" onClick={() => void retryRoutes()}>다시 불러오기</button></p>}
     <nav className={styles.tabs} aria-label="마이페이지 메뉴">

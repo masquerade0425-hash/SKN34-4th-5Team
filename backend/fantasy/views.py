@@ -10,6 +10,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 
 from accounts.models import PointTransaction, PointWallet
+from accounts.member_level import member_level_for_points
 from baseball.models import Player
 from fantasy.models import FantasySelection, FantasyWeek
 from fantasy.serializers import PlayerPageSerializer, PlayerSerializer, SelectionCreateSerializer, SelectionSerializer, WeekSerializer
@@ -175,5 +176,6 @@ class PointWalletView(APIView):
         )[:20]
         return Response({
             "balance": wallet.balance if wallet else 0,
+            "level": member_level_for_points(wallet.balance if wallet else 0),
             "transactions": list(transactions),
         })

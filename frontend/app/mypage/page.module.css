@@ -36,8 +36,12 @@
 .hiddenInput { display: none; }
 @media(max-width: 480px) { .photoEditor { flex-direction: column; } }
 
-.memberName { display: flex; align-items: center; gap: 8px; }
-.levelBadge { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; flex-shrink: 0; border: 1px solid #d5dce7; }
+.memberName { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.memberRank { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; font-size: 13px; color: #354359; }
+.memberRank > span { font-weight: 650; }
+.memberRank small { display: block; color: #59697e; font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.memberRank button { min-height: 44px; padding: 8px; color: var(--blue-dark); text-decoration: underline; text-underline-offset: 3px; }
+.levelBadge { width: 44px; height: 44px; object-fit: contain; flex-shrink: 0; }
 .nicknameRule { margin-top: -12px; font-size: 12px; line-height: 1.7; color: #657790; }
 .settings input[readonly] { background: #f1f3f6; color: #718097; }
 

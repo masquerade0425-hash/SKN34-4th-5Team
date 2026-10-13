@@ -8,12 +8,12 @@ export function memberLevelForPoints(points: number): MemberLevel {
   if (!Number.isSafeInteger(points) || points < 0) return 1;
   return points <= 500 ? 1 : points <= 1000 ? 2 : 3;
 }
-// Award amounts are pending team agreement; no automatic point grants yet.
+// Legacy preview sources; live awards are defined in backend/accounts/point_policy.py.
 export const POINT_SOURCES = ["attendance", "course_recommendation", "prediction"] as const;
 export const MEMBER_LEVELS: Record<MemberLevel, { label: string; image: string }> = {
-  1: { label: "1단계", image: "/images/member-levels/level-1.png" },
-  2: { label: "2단계", image: "/images/member-levels/level-2.png" },
-  3: { label: "3단계", image: "/images/member-levels/level-3.png" },
+  1: { label: "1단계", image: "/images/member-levels/rank-bronze.svg" },
+  2: { label: "2단계", image: "/images/member-levels/rank-silver.svg" },
+  3: { label: "3단계", image: "/images/member-levels/rank-gold.svg" },
 };
 
 // Six calendar months in KST; clamp month-end dates (Aug 31 -> Feb 28/29).

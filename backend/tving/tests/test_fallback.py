@@ -12,8 +12,8 @@ from tving.tests.test_tving import relational_daily
 
 class FallbackTests(TestCase):
     def setUp(self):
-        for index, code in enumerate(TEAM_MAP.values(), 1):
-            Team.objects.update_or_create(team_code=code, defaults={"id": index, "team_name_ko": code})
+        for code in TEAM_MAP.values():
+            Team.objects.get_or_create(team_code=code, defaults={"team_name_ko": code})
         self.stamp = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
 
     def snapshot(self, day):

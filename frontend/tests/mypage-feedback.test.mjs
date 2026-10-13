@@ -88,7 +88,7 @@ test("mypage validates feedback deep links and mounts the shared panel only for 
       useRouter: () => ({ push: (...args) => pushes.push(args) }), useSearchParams: () => new URLSearchParams("tab=feedback"),
       memberFetch: async () => Response.json({ balance: 0, transactions: [] }),
       useRoutesReady: () => true, useRoutes: () => [], useRoutesError: () => null, useLikedRoutes: () => [],
-      teamBoards: [], memberRoleLabel: () => "회원", nextNicknameChangeAt: () => null, styles,
+      MEMBER_LEVELS: { 1: { label: "1단계", image: "/images/member-levels/rank-bronze.svg" }, 2: { label: "2단계", image: "/images/member-levels/rank-silver.svg" }, 3: { label: "3단계", image: "/images/member-levels/rank-gold.svg" } }, teamBoards: [], memberRoleLabel: () => "회원", nextNicknameChangeAt: () => null, styles,
       AdminFeedbackPanel: noop, AdminMembersPanel: noop, AdminPostsPanel: noop, AdminReportsPanel: noop,
       MemberPosts: noop, MemberAccountSettings: noop, NicknameChangeButton: noop, PasswordChangeButton: noop,
       ProfilePhotoEditor: noop, RouteCard: noop, logoutMember: noop, memberError: noop,
@@ -124,10 +124,10 @@ test("mypage loads point balance and transactions and exposes retry on API failu
       attempt += 1;
       return attempt === 1
         ? Response.json({ detail: "포인트 서버 오류" }, { status: 503 })
-        : Response.json({ balance: 125, transactions: [{ amount: 25, transaction_type: "ACTIVITY_EARNED", description: "게시글 작성 보상", created_at: "2026-10-10T12:00:00Z" }] });
+        : Response.json({ balance: 125, level: 1, transactions: [{ amount: 25, transaction_type: "ACTIVITY_EARNED", description: "게시글 작성 보상", created_at: "2026-10-10T12:00:00Z" }] });
     },
     useRoutesReady: () => true, useRoutes: () => [], useRoutesError: () => null, useLikedRoutes: () => [],
-    teamBoards: [], memberRoleLabel: () => "회원", nextNicknameChangeAt: () => null, styles,
+    MEMBER_LEVELS: { 1: { label: "1단계", image: "/images/member-levels/rank-bronze.svg" }, 2: { label: "2단계", image: "/images/member-levels/rank-silver.svg" }, 3: { label: "3단계", image: "/images/member-levels/rank-gold.svg" } }, teamBoards: [], memberRoleLabel: () => "회원", nextNicknameChangeAt: () => null, styles,
     AdminFeedbackPanel: noop, AdminMembersPanel: noop, AdminPostsPanel: noop, AdminReportsPanel: noop,
     MemberPosts: noop, MemberAccountSettings: noop, NicknameChangeButton: noop, PasswordChangeButton: noop,
     ProfilePhotoEditor: noop, RouteCard: noop, logoutMember: noop, memberError: value => value.detail,
@@ -136,7 +136,7 @@ test("mypage loads point balance and transactions and exposes retry on API failu
   const Content = MyPage().props.children.type;
 
   let tree = hooks.render(Content);
-  assert.equal(find(tree, node => node.props?.role === "status")?.props.children, "포인트 정보를 불러오고 있어요.");
+  assert.ok(nodes(tree).some(node => node.props?.role === "status" && node.props.children === "포인트 정보를 불러오고 있어요."));
   hooks.flush();
   await Promise.resolve();
   await Promise.resolve();
@@ -158,6 +158,38 @@ test("mypage loads point balance and transactions and exposes retry on API failu
     ["/api/v1/fantasy/points/", "no-store"],
   ]);
   hooks.unmount();
+});
+
+test("member and admin profiles show server-provided levels, never invent a level on failure", async () => {
+  const policy = load("lib/member-policy.ts", {});
+  for (const identity of roles.filter(role => role.user)) {
+    for (const level of [1, 2, 3, undefined, 4]) {
+      const hooks = harness();
+      const { default: MyPage } = load("app/mypage/page.tsx", {
+        ...hooks, ...policy, styles, Link: noop, Image: noop, Suspense: noop,
+        useMemberAuth: () => identity, useRouter: () => ({ push: noop }),
+        useSearchParams: () => new URLSearchParams('tab=points'),
+        // Deliberately different from the local threshold: UI must trust the server's level.
+        memberFetch: async () => Response.json({ balance: 100, level, transactions: [] }),
+        useRoutesReady: () => true, useRoutes: () => [], useRoutesError: () => null, useLikedRoutes: () => [],
+        teamBoards: [], MemberPosts: noop, RouteCard: noop, memberError: () => '조회 실패',
+      });
+      const Content = MyPage().props.children.type;
+      let tree = hooks.render(Content);
+      assert.equal(find(tree, node => node.props?.className === 'levelBadge'), undefined);
+      hooks.flush(); await tick();
+      tree = hooks.render(Content);
+      const badge = find(tree, node => node.props?.className === 'levelBadge');
+      if ([1, 2, 3].includes(level)) {
+        assert.equal(badge.props.src, policy.MEMBER_LEVELS[level].image);
+        assert.match(text(tree), new RegExp(`${level}단계`));
+      } else {
+        assert.equal(badge, undefined);
+        assert.match(text(tree), /등급을 불러오지 못했어요/);
+      }
+      hooks.unmount();
+    }
+  }
 });
 
 function panel(identity, fetchList, fetchDetail = async () => ({}), mobile = false) {

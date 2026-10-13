@@ -1,0 +1,41 @@
+name: Member level regression
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  member-level:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: member_ci
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PYTHON_DOTENV_DISABLED: '1'
+      DB_HOST: localhost
+      DB_NAME: member_ci
+      DB_USER: postgres
+      DB_PASSWORD: test-only
+      CHAT_CHECKPOINT_SIGNING_KEY: test-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r backend/requirements.txt
+      - run: python backend/manage.py test accounts.test.test_member_level accounts.test.test_point_service accounts.test.test_point_integration fantasy tving.tests.test_home_schedule tving.tests.test_fallback --noinput
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend

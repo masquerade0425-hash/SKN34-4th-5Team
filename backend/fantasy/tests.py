@@ -179,7 +179,7 @@ class FantasyFlowTests(APITestCase):
         response = self.client.get("/api/v1/fantasy/points/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, {"balance": 0, "transactions": []})
+        self.assertEqual(response.data, {"balance": 0, "level": 1, "transactions": []})
         self.assertFalse(PointWallet.objects.filter(user=self.user).exists())
 
     def test_pitcher_score_uses_batters_faced_instead_of_innings(self):

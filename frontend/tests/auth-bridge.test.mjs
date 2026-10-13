@@ -56,10 +56,18 @@ test("current roles and staff navigation come from authoritative identity", () =
 
 test("nginx sends every API path directly to Django", () => {
   const nginx = readFileSync(join(root, "..", "nginx", "nginx.conf"), "utf8");
+<<<<<<< HEAD
   const api = nginx.match(/location \/api\/\s*\{([^}]*)\}/)?.[1];
   assert.ok(api, "the general API location must exist");
   assert.match(api, /set \$upstream backend:8000\s*;/);
   assert.match(api, /proxy_pass http:\/\/\$upstream\s*;/);
+=======
+  const api = nginx.match(/location \/api\/\s*\{([^}]+)\}/)?.[1];
+  assert.ok(api, "the API location must exist");
+  assert.match(api, /set \$upstream backend:8000\s*;/);
+  assert.match(api, /proxy_pass http:\/\/\$upstream\s*;/);
+  assert.match(nginx, /resolver 127\.0\.0\.11 valid=5s ipv6=off\s*;/);
+>>>>>>> 9af6a47bc5971228e02a7a31ea7e639d5e9c04df
   assert.doesNotMatch(nginx, /location \^~ \/api\/auth/);
 });
 

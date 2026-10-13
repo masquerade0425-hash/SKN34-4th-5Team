@@ -63,8 +63,8 @@ class PlaceRagTest(SimpleTestCase):
     def test_internal_and_uncertain_are_not_external(self):
         self.assertEqual(self.search("매점", stadium_code="JAMSIL")["count"], 0)
         result = self.search("매점", stadium_code="JAMSIL", scope="internal")
-        self.assertEqual([p["place_id"] for p in result["items"]], ["inside"])
-        self.assertEqual(self.search("매점", stadium_code="JAMSIL", scope="all")["count"], 3)
+        self.assertEqual(result["items"], [])  # Non-collected internal rows are never eligible.
+        self.assertEqual(self.search("매점", stadium_code="JAMSIL", scope="all")["count"], 2)
 
     def test_research_is_separate_and_never_fact(self):
         result = self.search("돈카츠", stadium_code="JAMSIL", include_research=True)
@@ -128,19 +128,13 @@ class PlaceRagTest(SimpleTestCase):
 
     def test_model_tool_cannot_request_unreviewed_analysis(self):
         from llm.tools.place_rag import create_place_rag_tool
-        from llm.v2.agent import course_chain, travel_sub_agent
-        from llm.v2.middleware.dynamic_tools import CAPABILITY_TOOLS
+        from llm.tools.assistant import build_tools
         with override_settings(PLACE_RAG_PATH=self.path):
             result = create_place_rag_tool().invoke({"query": "동경", "stadium_code": "JAMSIL",
                                                     "include_research": True})
         self.assertEqual(result["research_records"], [])
-        self.assertIn("search_place_knowledge", travel_sub_agent.TOOLS)
-        self.assertIn("search_place_knowledge", CAPABILITY_TOOLS["nearby_places"])
-        self.assertIn("search_place_knowledge", CAPABILITY_TOOLS["tourism"])
-        self.assertEqual(course_chain.TOOLS, ())
-        self.assertEqual(course_chain.CATEGORIES, ())
-        # develop의 에이전트는 선행 retriever 없이 명시적 도구 호출로만 검색한다.
-        self.assertNotIn("search_kbo_documents", travel_sub_agent.TOOLS)
+        self.assertIn("search_place_knowledge", [tool.name for tool in build_tools()])
+        self.assertNotIn("include_research", create_place_rag_tool().args_schema.model_fields)
 
 
 class AnalysisImporterTest(SimpleTestCase):
@@ -194,10 +188,12 @@ class AnalysisImporterTest(SimpleTestCase):
         with patch("socket.socket.connect", side_effect=AssertionError("Network forbidden")):
             docs, provenance = collected_documents()
             facilities, facility_sources = facility_documents()
-        self.assertGreater(len(docs), 30_000)
+        self.assertGreater(len(docs), 0)
+        self.assertLessEqual(len(docs), 527)
+        self.assertTrue(all(d["source"] in {"PARK", "TOUR"} for d in docs))
         self.assertEqual(len({d["stadium"] for d in docs}), 9)
         self.assertTrue(all(d["scope"] in {"external_candidate", "stadium_unknown"} for d in docs))
         self.assertGreater(len(facilities), 400)
         self.assertTrue(all(d["scope"] != "external_candidate" for d in facilities))
         self.assertEqual(len(provenance["manifest_sha256"]), 64)
-        self.assertEqual(len(facility_sources), 3)
+        self.assertEqual(len(facility_sources), 4)

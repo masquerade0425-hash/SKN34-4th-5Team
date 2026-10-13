@@ -24,7 +24,7 @@ from .parsers import (
 from .relational import (
     RelationalDataError, TEAM_MAP, athlete_sync_time, daily_sync_time, month_sync_time,
     persist_athlete, persist_daily, persist_month, persist_team, read_athlete,
-    read_daily, read_month, read_team, team_for, team_sync_time,
+    read_daily, read_month, read_next_game_day, read_team, team_for, team_sync_time,
 )
 
 
@@ -58,7 +58,7 @@ def _provider_json(path, params, opener=None):
     if path not in {
         "/kbo/schedule", "/kbo/schedule/day", "/kbo/history/team",
         "/kbo/history/athlete/ranking", "/team", "/kbo/history/athlete/top5",
-        "/roaster/item", "/athlete",
+        "/roaster", "/roaster/item", "/athlete",
     }:
         raise TvingInputError("허용되지 않은 TVING 리소스입니다.")
     url = f"{BASE_URL}{path}?{urlencode(params)}"
@@ -330,6 +330,18 @@ def refresh_daily(day, provider=None):
     return _fresh_or_fallback(fetch, persist_daily, lambda: read_daily(day), lambda: daily_sync_time(parsed_day), daily=True)
 
 
+def with_next_games(data):
+    """메인 화면에서만 빈 경기 목록을 다음 경기일로 대체하고 순위 기준일은 유지한다."""
+    if data["games"]:
+        return data
+    games, synced_at = read_next_game_day(data["date"])
+    if not games:
+        return data
+    checked_at = min(datetime.fromisoformat(data["fetchedAt"]), synced_at)
+    return _envelope({**data, "games": games}, checked_at, checked_at,
+                     stale=data["stale"], warning=data["warning"])
+
+
 def refresh_month(month, provider=None):
     provider = provider or _provider_json
     _validate_identity(ProviderSnapshot.MONTH, month)
@@ -444,13 +456,17 @@ def player_entity(player):
     return {"externalCode": player.external_code, "teamCode": code, "name": player.name, "imageUrl": player.image_url, "positions": player.positions, "backNumber": player.back_number, "profileLastSyncedAt": _iso(player.profile_last_synced_at)}
 
 
-def search_entities(*, kind, team=None, player=None, date=None, month=None, page=1, page_size=50):
+def search_entities(*, kind, team=None, player=None, date=None, month=None, page=1, page_size=50, name=None, offset=None):
     if kind not in {"game", "standing", "team", "player", "roster", "player-season", "team-top"}:
         raise TvingInputError("entity kind가 올바르지 않습니다.")
     if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= 10_000 or isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 100:
         raise TvingInputError("페이지 범위가 올바르지 않습니다.")
     if team is not None and (not isinstance(team, str) or team.upper() not in TEAM_CODES):
         raise TvingInputError("구단 코드가 올바르지 않습니다.")
+    if name is not None and (kind != "player" or not isinstance(name, str) or not name.strip() or len(name) > 80):
+        raise TvingInputError("선수 이름이 올바르지 않습니다.")
+    if offset is not None and (isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 1_000_000):
+        raise TvingInputError("페이지 범위가 올바르지 않습니다.")
     mapped_team = team_for(team.upper()) if team else None
     if player is not None and (not isinstance(player, str) or not player.strip() or len(player) > 40 or any(ord(char) < 32 for char in player)):
         raise TvingInputError("선수 코드가 올바르지 않습니다.")
@@ -476,6 +492,7 @@ def search_entities(*, kind, team=None, player=None, date=None, month=None, page
         query = Player.objects.select_related("team").order_by("external_code")
         if mapped_team: query = query.filter(team=mapped_team)
         if player: query = query.filter(external_code=player)
+        if name: query = query.filter(name__icontains=name.strip())
         serializer = player_entity
     elif kind == "roster":
         query = TeamRoster.objects.select_related("team", "player").order_by("team_id", "position", "player_id")
@@ -492,7 +509,7 @@ def search_entities(*, kind, team=None, player=None, date=None, month=None, page
         if mapped_team: query = query.filter(team=mapped_team)
         if player: query = query.filter(player_id=player)
         serializer = lambda row: {"id": row.pk, "teamCode": row.team.team_code, "playerCode": row.player_id, "athleteType": row.athlete_type, "category": row.category, "rank": row.rank, "lastSyncedAt": row.last_synced_at}
-    count = query.count(); start = (page - 1) * page_size
+    count = query.count(); start = offset if offset is not None else (page - 1) * page_size
     return [serializer(row) for row in query[start:start + page_size]], count
 
 

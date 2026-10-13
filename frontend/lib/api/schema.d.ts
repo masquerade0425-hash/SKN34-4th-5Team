@@ -145,7 +145,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description 본인 토큰/크레딧 잔액. 조회로 차감하지 않습니다. */
+        /** @description GET /api/v{1,2}/chat/usage/: 요청자 본인(회원 JWT / 비회원 guest_id 쿠키)의 토큰 잔액. 조회는 차감하지 않는다. */
         get: operations["chat_usage_retrieve"];
         put?: never;
         post?: never;
@@ -1400,7 +1400,8 @@ export interface paths {
         delete: operations["v1_community_admin_posts_destroy"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** @description 신고 관리와 동일한 정책으로 게시글과 관련 신고를 숨김 처리합니다. 해제는 지원하지 않습니다. */
+        patch: operations["v1_community_admin_posts_partial_update"];
         trace?: never;
     };
     "/api/v1/community/admin/reports/": {
@@ -1431,7 +1432,8 @@ export interface paths {
         put?: never;
         /**
          * @description 신고 처리.
-         *     hold: 보류(글 유지) / hide: 글 숨김(같은 글의 신고도 숨김 처리) /
+         *     hold: 보류(글 유지) / unhold: 보류 취소(처리 대기로 복귀) /
+         *     hide: 글 숨김(같은 글의 신고도 숨김 처리) /
          *     delete: 글 삭제(신고도 함께 삭제). 화면에서 고른 처분(sanction)은 기록용으로만 받고 계정에는 적용하지 않는다.
          */
         post: operations["v1_community_admin_reports_action_create"];
@@ -2287,11 +2289,12 @@ export interface components {
         };
         /**
          * @description * `hold` - hold
+         *     * `unhold` - unhold
          *     * `hide` - hide
          *     * `delete` - delete
          * @enum {string}
          */
-        AdminReportActionActionEnum: "hold" | "hide" | "delete";
+        AdminReportActionActionEnum: "hold" | "unhold" | "hide" | "delete";
         AdminReportActionResult: {
             action: string;
             sanction: string;
@@ -2366,21 +2369,6 @@ export interface components {
          * @enum {string}
          */
         BoardEnum: "free" | "teams";
-        /** @description POST /messages/ 요청 바디 검증 (content + 선택 사항 context). */
-        ChatMessageInput: {
-            content: string;
-            context?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /** @description PUT /messages/ 요청 바디 검증 (content + message_id + 선택 사항 context). */
-        ChatMessageUpdate: {
-            content: string;
-            context?: {
-                [key: string]: unknown;
-            } | null;
-            message_id: number | string;
-        };
         ChatSession: {
             /** Format: uuid */
             readonly id: string;
@@ -2524,6 +2512,10 @@ export interface components {
          */
         ContentTypeIdEnum: "12" | "14" | "28";
         Course: {
+            travelMode?: components["schemas"]["DirectionsModeEnum"];
+            legModes?: {
+                [key: string]: "walk" | "car" | "transit";
+            };
             /** Format: uuid */
             id: string;
             sampleId?: string;
@@ -2552,6 +2544,10 @@ export interface components {
             stops: components["schemas"]["CourseStop"][];
         };
         CourseCreateRequest: {
+            travelMode?: components["schemas"]["DirectionsModeEnum"];
+            legModes?: {
+                [key: string]: "walk" | "car" | "transit";
+            };
             title: string;
             stadium: string;
             content?: string;
@@ -2566,6 +2562,10 @@ export interface components {
             stops: components["schemas"]["CourseStopWrite"][];
         };
         CourseCreateResult: {
+            travelMode?: components["schemas"]["DirectionsModeEnum"];
+            legModes?: {
+                [key: string]: "walk" | "car" | "transit";
+            };
             /** Format: uuid */
             id: string;
             sampleId?: string;
@@ -2849,7 +2849,7 @@ export interface components {
             readonly _etag: string;
         };
         FeedbackInput: {
-            message_id: number | string;
+            message_id: string;
             rating: (components["schemas"]["Rating224Enum"] | components["schemas"]["NullEnum"]) | null;
             /** @default  */
             reason: components["schemas"]["FeedbackInputReasonEnum"] | components["schemas"]["BlankEnum"];
@@ -3003,6 +3003,7 @@ export interface components {
         KakaoPlace: {
             id: string;
             place_name: string;
+            place_url?: string;
             road_address_name: string;
             address_name: string;
             category_group_name: string;
@@ -3652,6 +3653,10 @@ export interface components {
             contentDoc?: unknown;
         };
         PatchedCoursePatchRequest: {
+            travelMode?: components["schemas"]["DirectionsModeEnum"];
+            legModes?: {
+                [key: string]: "walk" | "car" | "transit";
+            };
             title?: string;
             stadium?: string;
             content?: string;
@@ -3861,6 +3866,11 @@ export interface components {
             phone_general?: string | null;
             phone_facility?: string | null;
             phone_ticket?: string | null;
+            image_url?: string | null;
+            image_source_url?: (string) | null;
+            image_credit?: string | null;
+            image_credit_url?: (string) | null;
+            image_license_url?: (string) | null;
             /** Format: date-time */
             collected_at?: string;
         };
@@ -3987,6 +3997,10 @@ export interface components {
         PlaceSearchResponse: {
             places: components["schemas"]["KakaoPlace"][];
             hasNextPage: boolean;
+            /** @description 필터 적용 전 카카오 검색 결과 수 */
+            totalCount?: number;
+            /** @description 해당 검색에서 카카오가 반환할 수 있는 결과 수 */
+            pageableCount?: number;
             /**
              * Format: date-time
              * @description 카카오 공급자 응답을 성공적으로 조회한 시각이며 모든 저장 행의 동기화 시각을 뜻하지 않습니다.
@@ -4173,6 +4187,37 @@ export interface components {
             scope_name: string;
             readonly seat_views: components["schemas"]["SeatView"][];
         };
+        ParkingMap: {
+            imageUrl: string;
+            /** Format: uri */
+            sourceUrl?: string;
+            credit?: string;
+            title?: string;
+            summary?: string;
+            kind?: components["schemas"]["ParkingMapKindEnum"];
+            visualNotes?: string[];
+            /** Format: date */
+            capturedAt?: string;
+            width?: number;
+            height?: number;
+        };
+        /**
+         * @description * `entrance` - entrance
+         *     * `preferred-area` - preferred-area
+         *     * `nearby-alternatives` - nearby-alternatives
+         *     * `access-gates` - access-gates
+         * @enum {string}
+         */
+        ParkingMapKindEnum: "entrance" | "preferred-area" | "nearby-alternatives" | "access-gates";
+        SeatingMap: {
+            imageUrl: string;
+            /** Format: uri */
+            sourceUrl?: string;
+            title: string;
+            home_context_id: number;
+            season: number;
+            team_code: string;
+        };
         PublicStadium: {
             id: number;
             stadium_code: string;
@@ -4188,9 +4233,16 @@ export interface components {
             phone_general?: string | null;
             phone_facility?: string | null;
             phone_ticket?: string | null;
+            image_url?: string | null;
+            image_source_url?: (string) | null;
+            image_credit?: string | null;
+            image_credit_url?: (string) | null;
+            image_license_url?: (string) | null;
             /** Format: date-time */
             collected_at: string;
             readonly home_teams: components["schemas"]["PublicHomeTeam"][];
+            readonly parkingMap: components["schemas"]["ParkingMap"] | null;
+            readonly seatingMap: components["schemas"]["SeatingMap"] | null;
         };
         PublicTeam: {
             id: number;
@@ -4283,6 +4335,7 @@ export interface components {
             asset_no: number;
             asset_url: string;
             asset_role: string;
+            source_url?: (string) | null;
         };
         SeatMapAssetDetail: {
             id: number;
@@ -4290,6 +4343,7 @@ export interface components {
             asset_no: number;
             asset_url: string;
             asset_role: string;
+            source_url?: (string) | null;
             /** etag */
             readonly _etag: string;
         };
@@ -4434,6 +4488,11 @@ export interface components {
             phone_general?: string | null;
             phone_facility?: string | null;
             phone_ticket?: string | null;
+            image_url?: string | null;
+            image_source_url?: (string) | null;
+            image_credit?: string | null;
+            image_credit_url?: (string) | null;
+            image_license_url?: (string) | null;
             /** Format: date-time */
             collected_at: string;
         };
@@ -4480,6 +4539,11 @@ export interface components {
             phone_general?: string | null;
             phone_facility?: string | null;
             phone_ticket?: string | null;
+            image_url?: string | null;
+            image_source_url?: (string) | null;
+            image_credit?: string | null;
+            image_credit_url?: (string) | null;
+            image_license_url?: (string) | null;
             /** Format: date-time */
             collected_at: string;
             /** etag */
@@ -5014,38 +5078,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description No response body */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": {
-                        id?: number;
-                        sequence_no?: number;
-                        role?: string;
-                        content?: string;
-                        status?: string;
-                        tools?: Record<string, never>[];
-                        steps?: Record<string, never>[];
-                        /** Format: date-time */
-                        created_at?: string;
-                        /** Format: date-time */
-                        updated_at?: string;
-                    }[];
-                    "text/event-stream": {
-                        id?: number;
-                        sequence_no?: number;
-                        role?: string;
-                        content?: string;
-                        status?: string;
-                        tools?: Record<string, never>[];
-                        steps?: Record<string, never>[];
-                        /** Format: date-time */
-                        created_at?: string;
-                        /** Format: date-time */
-                        updated_at?: string;
-                    }[];
-                };
+                content?: never;
             };
         };
     };
@@ -5061,21 +5099,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChatMessageUpdate"];
-                "application/x-www-form-urlencoded": components["schemas"]["ChatMessageUpdate"];
-                "multipart/form-data": components["schemas"]["ChatMessageUpdate"];
-            };
-        };
+        requestBody?: never;
         responses: {
+            /** @description No response body */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "text/event-stream": string;
-                };
+                content?: never;
             };
         };
     };
@@ -5091,21 +5122,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChatMessageInput"];
-                "application/x-www-form-urlencoded": components["schemas"]["ChatMessageInput"];
-                "multipart/form-data": components["schemas"]["ChatMessageInput"];
-            };
-        };
+        requestBody?: never;
         responses: {
+            /** @description No response body */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "text/event-stream": string;
-                };
+                content?: never;
             };
         };
     };
@@ -5143,15 +5167,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description No response body */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
+                content?: never;
             };
         };
     };
@@ -10069,6 +10090,63 @@ export interface operations {
             };
         };
     };
+    v1_community_admin_posts_partial_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    action: "hide";
+                };
+            };
+        };
+        responses: {
+            /** @description 숨김 처리된 게시글 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPost"];
+                };
+            };
+            /** @description 잘못된 요청 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 로그인 필요 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 운영 관리자 권한 필요 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 게시글 없음 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     v1_community_admin_reports_list: {
         parameters: {
             query?: {
@@ -10787,6 +10865,8 @@ export interface operations {
                 /** @description 작성자 활동 목록. JWT 인증 필요, 본인 또는 공개 설정된 회원만 조회 가능. */
                 author_id?: number;
                 board?: "free" | "teams";
+                /** @description 글 분류 정확히 일치. 생략하면 전체 분류. */
+                category?: "경기토론" | "굿즈" | "사진·영상" | "소식·정보" | "응원" | "이적·신인" | "잡담" | "전력토론" | "좌석·예매" | "직관준비" | "직관후기" | "질문";
                 mine?: "1";
                 page?: number;
                 page_size?: number;
@@ -12635,6 +12715,8 @@ export interface operations {
         parameters: {
             query?: {
                 date?: string;
+                /** @description 경기가 없으면 다음 예정 경기일의 경기를 반환합니다. date와 순위는 요청 기준일을 유지하고 경기 날짜는 games[].date에 표시됩니다. */
+                next_if_empty?: boolean;
             };
             header?: never;
             path?: never;

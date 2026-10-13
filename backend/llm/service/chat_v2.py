@@ -15,11 +15,44 @@ log = logging.getLogger(__name__)
 
 def _model_history(messages, turns):
     """다음 모델 입력용 projection: 완료된 턴의 질문/최종 답변만."""
+    # Preserve server-produced choices as metadata for the course interpreter;
+    # model-visible text and the other specialists' input remain unchanged.
+    raw = {m.id: m for m in messages}
     return [
-        HumanMessage(item["content"]) if item["role"] == ChatRole.USER else AIMessage(item["content"] + ("\n" if item.get("planning", {}).get("questions") else "") + "\n".join(
-            q["question"] + ": " + " / ".join(q["choices"]) for q in item.get("planning", {}).get("questions", [])))
+        raw[item["id"]] if item["role"] == ChatRole.USER else AIMessage(item["content"] + ("\n" if item.get("planning", {}).get("questions") else "") + "\n".join(
+            q["question"] + ": " + " / ".join(q["choices"]) for q in item.get("planning", {}).get("questions", [])),
+            response_metadata={"planning_questions": item["planning"]["questions"]} if item.get("planning", {}).get("questions") else {})
         for item in project_history(messages, turns) if item["status"] == TurnStatus.COMPLETED and not item.get("answer_deleted")
     ]
+
+
+def _citation_links(message, sources=()):
+    """Render one deduplicated source footer for native citations and accepted originals."""
+    from urllib.parse import urlsplit, quote
+    links, seen = [], set()
+    annotations = [annotation for block in message.content if isinstance(block, dict)
+                   for annotation in block.get("annotations") or []
+                   if isinstance(annotation, dict) and annotation.get("type") == "url_citation"] if isinstance(message.content, list) else []
+    for source in [*annotations, *sources]:
+        url = source.get("url", "")
+        if not isinstance(url, str) or not url or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
+            continue
+        try:
+            parsed = urlsplit(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username is not None or parsed.password is not None:
+                continue
+            parsed.port  # Reject malformed authority, not just malformed schemes.
+        except ValueError:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        destination = quote(url, safe=':/?&=#%+~@!$;,*')
+        # ponytail: deliberately repeat model inline links; dedup them only with a proper Markdown parser.
+        title = str(source.get("title") or parsed.hostname)
+        title = " ".join(title.split()).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]").replace("<", "&lt;").replace(">", "&gt;")
+        links.append(f"[{title}]({destination})")
+    return "\n\n출처: " + " · ".join(links) if links else ""
 
 
 def _frames(graph_input, run):
@@ -36,7 +69,9 @@ def _frames(graph_input, run):
     from llm.v2.agent.chain import get_graph
     stream = get_graph().stream(graph_input, stream_mode=["messages", "updates"], subgraphs=True)
     parents, titles, summaries = {}, {}, {}  # namespace 첫 칸 → parent tool_call_id / tool_call_id → 하위 Agent title
+    new_course, course_failed = False, False
     streamed = False  # 마지막 메인 도구 호출 뒤 메인 텍스트를 흘렸는지
+    sources = []  # Only provenance returned with context accepted by the main agent.
     with closing(stream):
         for ns, mode, data in stream:
             parent = parents.get(ns[0]) if ns else None
@@ -53,11 +88,20 @@ def _frames(graph_input, run):
                 yield PublicChatEvent.DELTA.value, {"text": chunk.text, **({"parent_id": parent} if ns else {})}
                 continue
             for update in data.values():
+                if not ns and isinstance(update, dict) and "attachment_sources" in update:
+                    sources = update["attachment_sources"] or []
+                if not ns and isinstance(update, dict) and (update.get("decision") or {}).get("course_request") == "NEW":
+                    new_course = True
                 for message in (update or {}).get("messages") or [] if isinstance(update, dict) else ():
+                    if ns and isinstance(message, AIMessage) and message.response_metadata.get("parent_id"):
+                        parents[ns[0]] = parent = message.response_metadata["parent_id"]
                     if not ns and isinstance(message, AIMessage) and not message.tool_calls:
-                        run["answer"] = str(message.text)
+                        citations = _citation_links(message, sources)
+                        run["answer"] = str(message.text) + citations
                         if not streamed:
                             yield PublicChatEvent.DELTA.value, {"text": run["answer"]}  # 청크 없이 끝난 답: 한 번에
+                        elif citations:
+                            yield PublicChatEvent.DELTA.value, {"text": citations}
                     elif isinstance(message, AIMessage) and message.tool_calls:
                         if not ns:
                             run["messages"].append(message)
@@ -69,6 +113,9 @@ def _frames(graph_input, run):
                                 call["id"], call["name"], PublicToolStatus.RUNNING.value, parent, titles[call["id"]],
                                 summaries[call["id"]])
                     elif isinstance(message, ToolMessage):
+                        if message.status == "error" and (message.name == "plan_course" or
+                                (message.name == "ask_course" and isinstance(message.artifact, list))):
+                            course_failed = True
                         if not ns:
                             run["messages"].append(message)
                             if message.name == "present_planning_questions" and message.status != "error":
@@ -79,12 +126,20 @@ def _frames(graph_input, run):
                         yield PublicChatEvent.TOOL.value, _public_tool(
                             message.tool_call_id, message.name, status.value, parent, titles.get(message.tool_call_id),
                             summaries.get(message.tool_call_id))
+    if new_course and not course_failed:
+        run["course_history_reset"] = True
 
 
 def _stream_turn(thread, prefix, turns, human, context, charge):
     """프레임: tool*/delta* → done | stopped | error (chat_runs.stream_turn). 저장 답변 = 마지막 도구 없는 model 호출의 답."""
     run = {"answer": "", "messages": []}
-    graph_input = {"messages": [*_model_history(prefix, turns), human]}
+    from llm.v2.middleware.attachment_context import recent_messages
+    from llm.v1.rag.course.conversation_scope import scoped_messages
+    scoped = scoped_messages(prefix, turns)
+    graph_input = {"messages": recent_messages([*_model_history(scoped, turns), human]), "attachment_session_id": thread.thread_id,
+                   "tool_group_ids": human.additional_kwargs.get("tool_group_ids", [])}
+    from llm.v1.rag.course.memory import restore
+    graph_input["course_memory"] = restore(scoped, turns)
     if context:
         graph_input["context"] = context
     return chat_runs.stream_turn(thread, prefix, turns, human, lambda: _frames(graph_input, run), run,
@@ -103,13 +158,13 @@ def _start(session, thread, begin, context):
     return frames
 
 
-def send_message(session, content, context=None):
+def send_message(session, content, context=None, input_options=None):
     """V2 사용자 메시지를 저장하고 (event, data) 튜플을 흘려보내는 제너레이터를 돌려준다."""
     thread = ChatThread(session.id)
-    return _start(session, thread, lambda: thread.ask(content), context)
+    return _start(session, thread, lambda: thread.ask(content, input_options), context)
 
 
-def message_update(session, message_id, content, context=None):
+def message_update(session, message_id, content, context=None, input_options=None):
     """V2: 해당 사용자 메시지 뒤를 지우고 같은 ID 로 질문을 바꾼 뒤 다시 답한다."""
     thread = ChatThread(session.id)
-    return _start(session, thread, lambda: thread.edit(message_id, content), context)
+    return _start(session, thread, lambda: thread.edit(message_id, content, input_options), context)

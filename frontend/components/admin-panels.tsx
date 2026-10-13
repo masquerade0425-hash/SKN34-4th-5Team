@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { getMemberUser, listAdminMembers, updateAdminRole, type AdminMember, type MemberUser } from "@/lib/api/auth";
-import { actOnAdminReport, deleteAdminPost, listAdminPosts, listAdminReports, reportReasonLabel, reportStatusLabel, sanctionLabel, type AdminPost, type AdminReport, type AdminSanction } from "@/lib/api/admin-community";
+import { actOnAdminReport, deleteAdminPost, hideAdminPost, listAdminPosts, listAdminReports, reportReasonLabel, reportStatusLabel, sanctionLabel, type AdminPost, type AdminReport, type AdminSanction } from "@/lib/api/admin-community";
 import type { Page } from "@/lib/api/types";
 import { memberRoleLabel } from "@/lib/member-policy";
 import { getTeamBoard, getTeamBoardHref } from "@/lib/team-community";
@@ -95,11 +95,12 @@ export function AdminMembersPanel() {
     {data && <>
       {me && <div className={styles.identity}><strong>{me.username}</strong><span>{memberRoleLabel(me)}</span><span>전체 회원 {data.count}명</span></div>}
       <SearchBox query={list.query} busy={busy} label="회원 검색" placeholder="회원 번호 또는 아이디" onSearch={list.search} />
-      <div className={styles.tableScroll}><table><caption className="sr-only">회원 목록과 관리자 권한</caption>
+      <p className={styles.scrollHint} id="members-scroll-hint">표가 잘리면 좌우로 스크롤해 나머지 항목을 확인하세요.</p>
+      <div className={styles.tableScroll} role="region" aria-label="회원 목록 가로 스크롤" aria-describedby="members-scroll-hint" tabIndex={0}><table><caption className="sr-only">회원 목록과 관리자 권한</caption>
         <thead><tr>{["회원 번호", "아이디", "권한", "상태", "가입일", "권한 관리"].map(label => <th key={label}>{label}</th>)}</tr></thead>
         <tbody>{data.results.map(member => <tr key={member.id}>
-          <td>{member.id}</td><td>{member.username}</td><td>{memberRoleLabel(member)}</td><td>{member.is_active ? "활성" : "비활성"}</td><td>{member.date_joined.slice(0, 10)}</td>
-          <td>{me?.is_superuser && member.id !== me.id && !member.is_superuser && member.is_active
+          <td className={styles.nowrap}>{member.id}</td><td className={styles.longText}>{member.username}</td><td className={styles.nowrap}>{memberRoleLabel(member)}</td><td className={styles.nowrap}>{member.is_active ? "활성" : "비활성"}</td><td className={styles.nowrap}>{member.date_joined.slice(0, 10)}</td>
+          <td className={styles.nowrap}>{me?.is_superuser && member.id !== me.id && !member.is_superuser && member.is_active
             ? <button type="button" disabled={busy} onClick={() => void changeRole(member)}>{member.is_staff ? "운영 관리자 회수" : "운영 관리자 부여"}</button>
             : <span className={styles.muted}>변경 불가</span>}</td>
         </tr>)}
@@ -116,6 +117,16 @@ export function AdminPostsPanel() {
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
   const list = usePagedList<AdminPost>(listAdminPosts, "게시글 목록을 불러오지 못했어요.");
+  async function hide(post: AdminPost) {
+    if (busy || list.loading || post.is_hidden || !window.confirm(`#${post.post_number} "${post.title}" 게시글을 숨길까요?\n신고 관리의 숨김과 동일하게 처리하며, 게시글은 삭제하지 않습니다.`)) return;
+    setBusy(true); setActionError(""); setNotice("");
+    try {
+      await hideAdminPost(post.source_id);
+      setNotice(`#${post.post_number} 게시글을 숨겼어요.`);
+      list.refresh();
+    } catch (cause) { setActionError(errorText(cause, "게시글을 숨기지 못했어요.")); }
+    finally { setBusy(false); }
+  }
   async function remove(post: AdminPost) {
     if (busy || !window.confirm(`#${post.post_number} "${post.title}" 게시글을 삭제하시겠어요?\n댓글과 신고 기록도 함께 삭제되고 되돌릴 수 없어요.`)) return;
     setBusy(true); setActionError(""); setNotice("");
@@ -129,21 +140,22 @@ export function AdminPostsPanel() {
   const { data } = list;
   return <section className={styles.panel} aria-labelledby="admin-posts-title">
     <h2 id="admin-posts-title">게시글 관리</h2>
-    <p className={styles.intro}>커뮤니티 게시글을 확인하고 운영 정책에 맞지 않는 글을 삭제하세요. 신고가 들어온 글은 신고 수가 빨갛게 표시돼요.</p>
+    <p className={styles.intro}>커뮤니티 게시글을 확인하고 운영 정책에 따라 숨기거나 삭제하세요. 숨김은 신고 관리와 동일한 기준으로 처리돼요.</p>
     {list.loading && !data && <p role="status">게시글을 불러오고 있어요.</p>}
     {list.error && <div className={styles.feedback} role="alert"><p>{list.error}</p><button type="button" onClick={() => list.refresh()}>다시 확인</button></div>}
     {actionError && <p className={styles.feedback} role="alert">{actionError}</p>}
     {notice && <p role="status" className={styles.feedback}>{notice}</p>}
     {data && <>
       <SearchBox query={list.query} busy={busy} label="게시글 검색" placeholder="제목, 작성자 또는 글 번호" onSearch={list.search} />
-      <div className={styles.tableScroll}><table><caption className="sr-only">커뮤니티 게시글 목록</caption>
+      <p className={styles.scrollHint} id="posts-scroll-hint">표가 잘리면 좌우로 스크롤해 나머지 항목을 확인하세요.</p>
+      <div className={styles.tableScroll} role="region" aria-label="게시글 목록 가로 스크롤" aria-describedby="posts-scroll-hint" tabIndex={0}><table><caption className="sr-only">커뮤니티 게시글 목록</caption>
         <thead><tr>{["글 번호", "게시판", "제목", "작성자", "작성일", "조회", "댓글", "신고", "관리"].map(label => <th key={label}>{label}</th>)}</tr></thead>
         <tbody>{data.results.map(post => <tr key={post.source_id}>
-          <td>{post.post_number}</td><td>{boardLabel(post)}</td>
+          <td className={styles.nowrap}>{post.post_number}</td><td className={styles.nowrap}>{boardLabel(post)}</td>
           <td><Link href={postHref(post)} target="_blank">{post.title}</Link>{post.is_sample && <span className={styles.muted}> (예시)</span>}{post.is_hidden && <span className={styles.hiddenTag}>숨김</span>}</td>
-          <td>{post.author}</td><td>{dateText(post.created_at)}</td><td>{post.views}</td><td>{post.comment_count}</td>
-          <td><span className={`${styles.count}${post.report_count ? ` ${styles.hot}` : ""}`}>{post.report_count}</span></td>
-          <td><button type="button" className={styles.danger} disabled={busy} onClick={() => void remove(post)}>삭제</button></td>
+          <td className={styles.longText}>{post.author}</td><td className={styles.nowrap}>{dateText(post.created_at)}</td><td className={styles.nowrap}>{post.views}</td><td className={styles.nowrap}>{post.comment_count}</td>
+          <td className={styles.nowrap}><span className={`${styles.count}${post.report_count ? ` ${styles.hot}` : ""}`}>{post.report_count}</span></td>
+          <td className={styles.nowrap}><div className={styles.actions}><button type="button" className={styles.hide} disabled={busy || list.loading || post.is_hidden} onClick={() => void hide(post)}>{post.is_hidden ? "숨김 처리됨" : "숨김"}</button><button type="button" className={styles.delete} disabled={busy} onClick={() => void remove(post)}>삭제</button></div></td>
         </tr>)}
         {!data.results.length && <tr><td colSpan={9}>게시글이 없어요.</td></tr>}</tbody>
       </table></div>
@@ -194,13 +206,14 @@ export function AdminReportsPanel() {
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<AdminReport | null>(null);
   const list = usePagedList<AdminReport>(listAdminReports, "신고 목록을 불러오지 못했어요.");
-  async function run(report: AdminReport, action: "hold" | "hide" | "delete", sanction: AdminSanction = "none") {
+  async function run(report: AdminReport, action: "hold" | "unhold" | "hide" | "delete", sanction: AdminSanction = "none") {
     if (busy) return;
     if (action === "hide" && !window.confirm(`#${report.post.post_number} "${report.post.title}" 게시글을 숨기시겠어요?\n숨긴 글은 커뮤니티에서 보이지 않아요.`)) return;
     setBusy(true); setActionError(""); setNotice("");
     try {
       await actOnAdminReport(report.id, action, sanction);
       if (action === "hold") setNotice(`#${report.post.post_number} 신고를 보류했어요.`);
+      else if (action === "unhold") setNotice(`#${report.post.post_number} 보류를 취소하고 처리 대기로 변경했어요.`);
       else if (action === "hide") setNotice(`#${report.post.post_number} 게시글을 숨겼어요.`);
       else {
         setNotice(`#${report.post.post_number} 게시글을 삭제했어요.`);
@@ -222,17 +235,18 @@ export function AdminReportsPanel() {
     {notice && <p role="status" className={styles.feedback}>{notice}</p>}
     {data && <>
       <p className={styles.identity}><strong>전체 신고</strong><span>{data.count}건{waiting ? ` · 이 페이지 처리 대기 ${waiting}건` : ""}</span></p>
-      <div className={styles.tableScroll}><table><caption className="sr-only">게시글 신고 목록</caption>
+      <p className={styles.scrollHint} id="reports-scroll-hint">표가 잘리면 좌우로 스크롤해 나머지 항목을 확인하세요.</p>
+      <div className={styles.tableScroll} role="region" aria-label="신고 목록 가로 스크롤" aria-describedby="reports-scroll-hint" tabIndex={0}><table><caption className="sr-only">게시글 신고 목록</caption>
         <thead><tr>{["신고일", "게시글", "작성자", "신고자", "사유", "상세 내용", "상태", "처리"].map(label => <th key={label}>{label}</th>)}</tr></thead>
         <tbody>{data.results.map(report => <tr key={report.id}>
-          <td>{dateText(report.created_at)}</td>
+          <td className={styles.nowrap}>{dateText(report.created_at)}</td>
           <td><Link href={postHref(report.post)} target="_blank">#{report.post.post_number} {report.post.title}</Link></td>
-          <td>{report.post.author}{report.post.owner && <span className={styles.muted}> ({report.post.owner.username})</span>}</td>
-          <td>{report.reporter}</td><td>{reportReasonLabel[report.reason] ?? report.reason}</td>
-          <td>{report.detail || <span className={styles.muted}>없음</span>}</td>
-          <td><span className={`${styles.status} ${styles[`status_${report.status}`] ?? ""}`}>{reportStatusLabel[report.status] ?? report.status}</span></td>
-          <td><div className={styles.actions}>
-            <button type="button" className={styles.hold} disabled={busy || report.status === "held"} onClick={() => void run(report, "hold")}>보류</button>
+          <td className={styles.longText}>{report.post.author}{report.post.owner && <span className={styles.muted}> ({report.post.owner.username})</span>}</td>
+          <td className={styles.longText}>{report.reporter}</td><td className={styles.nowrap}>{reportReasonLabel[report.reason] ?? report.reason}</td>
+          <td className={styles.longText}>{report.detail || <span className={styles.muted}>없음</span>}</td>
+          <td className={styles.nowrap}><span className={`${styles.status} ${styles[`status_${report.status}`] ?? ""}`}>{reportStatusLabel[report.status] ?? report.status}</span></td>
+          <td className={styles.nowrap}><div className={styles.actions}>
+            <button type="button" className={styles.hold} disabled={busy || report.post.is_hidden || report.status === "hidden"} onClick={() => void run(report, report.status === "held" ? "unhold" : "hold")}>{report.status === "held" ? "보류 취소" : "보류"}</button>
             <button type="button" className={styles.hide} disabled={busy || report.post.is_hidden} onClick={() => void run(report, "hide")}>숨김</button>
             <button type="button" className={styles.delete} disabled={busy} onClick={() => { setActionError(""); setDeleting(report); }}>삭제</button>
           </div></td>

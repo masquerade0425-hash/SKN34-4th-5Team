@@ -41,8 +41,8 @@ export type AdminReport = {
   handled_at: string | null;
 };
 
-/** 신고 처리: 보류 / 숨김 / 삭제(작성자 처분과 함께) */
-export type AdminReportAction = "hold" | "hide" | "delete";
+/** 신고 처리: 보류 / 보류 취소 / 숨김 / 삭제(작성자 처분과 함께) */
+export type AdminReportAction = "hold" | "unhold" | "hide" | "delete";
 /** 삭제 팝업에서 고르는 처분 (현재는 기록용이며 계정에는 적용되지 않는다) */
 export type AdminSanction = "none" | "7d" | "30d" | "permanent";
 export type AdminReportActionResult = {
@@ -64,6 +64,10 @@ export const listAdminPosts = (query: URLSearchParams, signal?: AbortSignal) => 
 
 export const deleteAdminPost = (sourceId: string) => apiRequest<never>(`/api/v1/community/admin/posts/${encodeURIComponent(sourceId)}/`, {
   method: "DELETE",
+}, memberFetch);
+
+export const hideAdminPost = (sourceId: string) => apiRequest<AdminPost>(`/api/v1/community/admin/posts/${encodeURIComponent(sourceId)}/`, {
+  method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "hide" }),
 }, memberFetch);
 
 export const listAdminReports = (query: URLSearchParams, signal?: AbortSignal) => apiRequest<Page<AdminReport>>(`/api/v1/community/admin/reports/?${query}`, {

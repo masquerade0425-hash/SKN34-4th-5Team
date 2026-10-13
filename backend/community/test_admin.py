@@ -11,7 +11,7 @@ class CommunityAdminApiTests(APITestCase):
         cls.member = users.create_user(username="member", nickname="회원", password="pass-1234!")
         cls.reporter = users.create_user(username="reporter", nickname="신고자")
         cls.staff = users.create_user(username="staff", nickname="운영", is_staff=True)
-        cls.post = CommunityPost.objects.create(board="free", author="회원", title="관리 대상 글", content="본문", category="잡담", owner=cls.member)
+        cls.post = CommunityPost.objects.create(post_number="000001", board="free", author="회원", title="관리 대상 글", content="본문", category="잡담", owner=cls.member)
         cls.report = CommunityReport.objects.create(post=cls.post, reporter=cls.reporter, reason="spam", detail="광고")
 
     def act(self, **body):
@@ -55,6 +55,43 @@ class CommunityAdminApiTests(APITestCase):
         self.client.force_authenticate(None)
         self.assertEqual(self.client.get(f"/api/v1/community/posts/{self.post.source_id}/").status_code, 200)
 
+    def test_post_hide_matches_report_policy_and_preserves_records(self):
+        comment = CommunityComment.objects.create(post=self.post, author=self.member, content="댓글")
+        self.client.force_authenticate(self.staff)
+        url = f"/api/v1/community/admin/posts/{self.post.pk}/"
+        self.assertEqual(self.client.patch(url, {"action": "hide"}, format="json").status_code, 200)
+        self.report.refresh_from_db()
+        handled_at = self.report.handled_at
+        self.assertEqual((self.report.status, self.report.handled_by), ("hidden", self.staff))
+        self.assertTrue(CommunityComment.objects.filter(pk=comment.pk).exists())
+        self.assertEqual(self.client.patch(url, {"action": "hide"}, format="json").status_code, 200)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.handled_at, handled_at)
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get(f"/api/v1/community/posts/{self.post.pk}/").status_code, 404)
+        self.client.force_authenticate(self.staff)
+        self.assertEqual(self.client.get(f"/api/v1/community/posts/{self.post.pk}/").status_code, 200)
+
+    def test_post_without_reports_can_be_hidden(self):
+        post = CommunityPost.objects.create(board="free", author="회원", title="신고 없음", content="본문", category="잡담")
+        self.client.force_authenticate(self.staff)
+        response = self.client.patch(f"/api/v1/community/admin/posts/{post.pk}/", {"action": "hide"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_hidden"])
+        self.assertEqual(response.data["report_count"], 0)
+
+    def test_post_hide_permissions_and_input(self):
+        url = f"/api/v1/community/admin/posts/{self.post.pk}/"
+        self.assertEqual(self.client.patch(url, {"action": "hide"}, format="json").status_code, 401)
+        self.client.force_authenticate(self.member)
+        self.assertEqual(self.client.patch(url, {"action": "hide"}, format="json").status_code, 403)
+        self.client.force_authenticate(self.staff)
+        for body in ({}, {"action": "unhide"}, {"action": "hide", "title": "변경"}):
+            self.assertEqual(self.client.patch(url, body, format="json").status_code, 400)
+        self.assertEqual(self.client.patch("/api/v1/community/admin/posts/missing/", {"action": "hide"}, format="json").status_code, 404)
+        self.post.refresh_from_db()
+        self.assertFalse(self.post.is_hidden)
+
     def test_hide_removes_post_from_public_views(self):
         self.assertEqual(self.act(action="hide").status_code, 200)
         self.post.refresh_from_db()
@@ -68,6 +105,41 @@ class CommunityAdminApiTests(APITestCase):
         self.assertFalse(any(row["id"] == self.post.source_id for row in rows))
         self.client.force_authenticate(self.staff)
         self.assertEqual(self.client.get(f"/api/v1/community/posts/{self.post.source_id}/").status_code, 200)
+
+    def test_unhold_returns_report_to_pending_without_changing_post(self):
+        self.assertEqual(self.act(action="hold").status_code, 200)
+        response = self.act(action="unhold")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "pending")
+        self.report.refresh_from_db()
+        self.post.refresh_from_db()
+        self.assertEqual(self.report.status, "pending")
+        self.assertIsNone(self.report.handled_at)
+        self.assertIsNone(self.report.handled_by)
+        self.assertFalse(self.post.is_hidden)
+        self.assertEqual(self.act(action="hold").data["status"], "held")
+
+    def test_repeated_unhold_is_idempotent(self):
+        self.act(action="hold")
+        self.assertEqual(self.act(action="unhold").data["status"], "pending")
+        self.assertEqual(self.act(action="unhold").data["status"], "pending")
+
+    def test_hidden_report_cannot_be_held_or_unheld(self):
+        self.act(action="hide")
+        for action in ("hold", "unhold"):
+            self.assertEqual(self.act(action=action).status_code, 400)
+        self.post.refresh_from_db()
+        self.report.refresh_from_db()
+        self.assertTrue(self.post.is_hidden)
+        self.assertEqual(self.report.status, "hidden")
+
+    def test_unhold_requires_staff_and_rejects_sanction(self):
+        self.assertEqual(self.act(action="unhold", sanction="7d").status_code, 400)
+        self.client.force_authenticate(self.member)
+        url = f"/api/v1/community/admin/reports/{self.report.id}/action/"
+        self.assertEqual(self.client.post(url, {"action": "unhold"}, format="json").status_code, 403)
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.post(url, {"action": "unhold"}, format="json").status_code, 401)
 
     def test_sanction_only_with_delete(self):
         self.assertEqual(self.act(action="hold", sanction="7d").status_code, 400)

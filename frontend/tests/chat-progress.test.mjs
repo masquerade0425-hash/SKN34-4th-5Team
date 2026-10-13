@@ -13,7 +13,7 @@ const frontend = dirname(dirname(fileURLToPath(import.meta.url)));
 const scratch = mkdtempSync(join(tmpdir(), "kbo-chat-progress-test-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 symlinkSync(join(frontend, "node_modules"), join(scratch, "node_modules"), "dir");
-for (const name of ["lib/member-auth-request", "lib/chat/planning", "lib/chat/types", "lib/chat/validation", "lib/chat/course", "lib/chat/wire", "lib/chat/history", "lib/chat/client"]) {
+for (const name of ["lib/course-directions", "lib/media-url", "lib/member-auth-request", "lib/chat/planning", "lib/chat/types", "lib/chat/validation", "lib/chat/course", "lib/chat/wire", "lib/chat/history", "lib/chat/client"]) {
   const source = readFileSync(join(frontend, `${name}.ts`), "utf8");
   const { outputText } = ts.transpileModule(source, {
     fileName: `${name}.ts`, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
@@ -21,16 +21,18 @@ for (const name of ["lib/member-auth-request", "lib/chat/planning", "lib/chat/ty
   mkdirSync(dirname(join(scratch, `${name}.js`)), { recursive: true });
   writeFileSync(join(scratch, `${name}.js`), outputText);
 }
-{
-  const source = readFileSync(join(frontend, "components/chat-pending.tsx"), "utf8");
+for (const name of ["chat-pending", "icons"]) {
+  const source = readFileSync(join(frontend, `components/${name}.tsx`), "utf8");
   const { outputText } = ts.transpileModule(source, {
-    fileName: "chat-pending.tsx", compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+    fileName: `${name}.tsx`, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   });
   mkdirSync(join(scratch, "components"), { recursive: true });
-  writeFileSync(join(scratch, "components/chat-pending.js"), outputText);
+  writeFileSync(join(scratch, `components/${name}.js`), outputText);
 }
 {
-  const source = readFileSync(join(frontend, "components/chat-answer.tsx"), "utf8");
+  writeFileSync(join(scratch, "components/youtube-video-player.js"), `exports.YouTubeVideoPlayer = ({ videoId, start }) => require("react").createElement("span", { "data-youtube": videoId, "data-start": start ?? "" });\n`);
+  const source = readFileSync(join(frontend, "components/chat-answer.tsx"), "utf8").replace(/^import "@\/styles\/chat-answer\.css";$/m, "").replaceAll("@/lib/media-url", "../lib/media-url.js")
+    .replaceAll("@/components/youtube-video-player", "./youtube-video-player.js");
   const { outputText } = ts.transpileModule(source, {
     fileName: "chat-answer.tsx", compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   });
@@ -58,8 +60,58 @@ const { commitChatLoad, restoreChatMessages } = require("./lib/chat/history.js")
 const { ChatClientError, fetchChatHistory, sendChatMessage } = require("./lib/chat/client.js");
 const { ChatPending } = require("./components/chat-pending.js");
 const { ChatProgress } = require("./components/chat-progress.js");
+const { ChatAnswer } = require("./components/chat-answer.js");
 const { appendTimeline, buildTimeline } = require("./lib/chat/types.js");
 const toolItems = tools => tools.length ? [{ kind: "tools", tools: tools.map(tool => ({ kind: "tool", parentId: null, ...tool })) }] : [];
+
+test("course source chips follow each matching timeline step and hide raw URLs", () => {
+  const html = renderToStaticMarkup(React.createElement(ChatAnswer, {
+    text: "11:20 식당 — 점심\n12:10 카페 — 커피\n13:15 구장 입장\n\n식당에 다시 안내",
+    places: [{ name: "식당", time: "11:20", placeUrl: "https://place.map.kakao.com/1" },
+             { name: "카페", time: "12:10", placeUrl: "https://place.map.kakao.com/2" }, { name: "구장", time: "13:15" }],
+  }));
+  assert.equal((html.match(/class="chat-place-source"/g) ?? []).length, 2);
+  assert.match(html, /점심<a[^>]+href="https:\/\/place.map.kakao.com\/1"/);
+  assert.match(html, /커피<a[^>]+href="https:\/\/place.map.kakao.com\/2"/);
+  assert.match(html, /target="_blank" rel="noopener noreferrer"/);
+  assert.doesNotMatch(html.replace(/<[^>]+>/g, ""), /https?:\/\//);
+});
+
+test("lodging condition sources render as small Yanolja chips without duplicate or raw URLs", () => {
+  const url = "https://nol.yanolja.com/stay/domestic/3012501";
+  const html = renderToStaticMarkup(React.createElement(ChatAnswer, {
+    text: `21:30 숙소 — 금연 객실 부합 [야놀자](${url})`,
+    places: [{ name: "숙소", time: "21:30", placeUrl: url }],
+  }));
+  assert.equal((html.match(/class="chat-place-source"/g) ?? []).length, 1);
+  assert.match(html, /target="_blank" rel="noopener noreferrer"/);
+  assert.match(html, /야놀자 <span/);
+  assert.doesNotMatch(html.replace(/<[^>]+>/g, ""), /https?:\/\//);
+  const unsafe = renderToStaticMarkup(React.createElement(ChatAnswer, {
+    text: "[야놀자](javascript:alert(1)) [야놀자](https://nol.yanolja.com.evil.test/stay/domestic/1)",
+  }));
+  assert.doesNotMatch(unsafe, /<a /);
+});
+
+test("menu and review evidence render beside their course step without displaying the URL", () => {
+  const html = renderToStaticMarkup(React.createElement(ChatAnswer, {
+    text: "- 11:00 식당 — 돈까스 근거 확인 [메뉴 근거](https://example.com/menu?id=1&branch=2)\n- 12:00 카페 — 조용함 근거 확인 [후기 근거](https://example.com/reviews/2)",
+    places: [{ name: "식당", time: "11:00", placeUrl: "https://place.map.kakao.com/1" }],
+  }));
+  assert.equal((html.match(/class="chat-place-source"/g) ?? []).length, 3);
+  assert.match(html, /돈까스 근거 확인 <a[^>]+href="https:\/\/example.com\/menu\?id=1&amp;branch=2"/);
+  assert.match(html, /조용함 근거 확인 <a[^>]+href="https:\/\/example.com\/reviews\/2"/);
+  assert.match(html, /메뉴 근거 확인 \(새 창\)/);
+  assert.match(html, /후기 근거 확인 \(새 창\)/);
+  assert.doesNotMatch(html.replace(/<[^>]+>/g, ""), /https?:\/\//);
+});
+
+test("condition citations cannot turn script schemes or credential URLs into links", () => {
+  const html = renderToStaticMarkup(React.createElement(ChatAnswer, {
+    text: '[메뉴 근거](javascript:alert(1)) [후기 근거](data:text/html,bad) [메뉴 근거](https://user:password@example.com/menu) [메뉴 근거](https://example.com/\"onclick=\"bad)',
+  }));
+  assert.doesNotMatch(html, /<a /);
+});
 
 const SESSION = "22222222-2222-4222-8222-222222222222";
 const USER_MSG = 1;
@@ -116,6 +168,17 @@ test("tool log renders Korean labels for known and unknown tool names, no raw na
   assert.match(specialists, /여행 정보 조사 정보 조회 완료/);
   assert.match(specialists, /장소 정보 확인 조회 중/);
   assert.doesNotMatch(specialists, /ask_|<span>정보 조회/);
+});
+
+test("main progress text renders approved images and blocks untrusted media", () => {
+  const html = renderToStaticMarkup(React.createElement(ChatProgress, { items: [{
+    kind: "text", parentId: null,
+    text: "![구장](/images/stadiums/exteriors/jamsil.jpg)\n\n![차단](https://evil.example/photo.png)",
+  }] }));
+  assert.match(html, /<img[^>]*src="\/images\/stadiums\/exteriors\/jamsil\.jpg"[^>]*alt="구장"/);
+  assert.doesNotMatch(html, /https:\/\/evil\.example/);
+  assert.match(html, /role="img" aria-label="차단"/);
+  assert.match(html, /이미지를 표시할 수 없어요/);
 });
 
 test("display progress never enters the model message payload", () => {
@@ -253,6 +316,21 @@ test("history steps rebuild the same timeline; missing kind/parent_id/steps defa
   assert.deepEqual(buildTimeline([], []), []);
 });
 
+test("web specialist label and inner MCP artifacts survive live and restored history", () => {
+  const items = toolItems([
+    tl("web", "ask_web_research", "completed", { kind: "sub_agent", summary: "메뉴 확인" }),
+    tl("body", "jev_read_body", "completed", { parentId: "web" }),
+  ]);
+  const html = renderToStaticMarkup(React.createElement(ChatProgress, { items, live: true }));
+  assert.match(html, /웹 정보 조사 \(서브에이전트\).*메뉴 확인.*chat-progress-nested.*웹 원문 확인/s);
+  const [restored] = restoreChatMessages([{ id: ASSISTANT_MSG, sequence_no: 2, role: "assistant", content: "답", status: "completed", created_at: "x", updated_at: "x",
+    tools: [{ id: "web", tool_name: "ask_web_research", status: "completed", kind: "sub_agent", parent_id: null },
+            { id: "body", tool_name: "jev_read_body", status: "completed", kind: "tool", parent_id: "web" }],
+    steps: [{ type: "tool", id: "web" }, { type: "tool", id: "body" }] }]);
+  const history = renderToStaticMarkup(React.createElement(ChatProgress, { items: restored.timeline }));
+  assert.match(history, /웹 정보 조사 \(서브에이전트\).*chat-progress-nested.*웹 원문 확인/s);
+});
+
 test("detail disclosure renders only when detail is present, as plain text", () => {
   const plain = renderToStaticMarkup(React.createElement(ChatProgress, { items: toolItems([{ id: "x", toolName: "get_weather", status: "completed" }]) }));
   assert.doesNotMatch(plain, /<details|상세|args/);
@@ -318,8 +396,12 @@ test("running main sub-agents render only above the composer; finished ones fold
   const body = items => renderToStaticMarkup(React.createElement(ChatProgress, { items, live: true }));
   const both = tools("running", "running");
   assert.match(bar(both), /role="status"/);
-  assert.match(bar(both), /야구 정보 확인 · 두산 다음 경기 확인 조회 중/);
-  assert.match(bar(both), /여행 정보 조사 조회 중/);
+  const text = bar(both).replace(/<[^>]*>/g, "");
+  assert.match(text, /야구 정보 확인 · 두산 다음 경기 확인 조회 중/);
+  assert.match(text, /여행 정보 조사 조회 중/);
+  assert.match(bar(both), /aria-live="polite"/);
+  assert.match(bar(both), /<svg[^>]*aria-hidden="true"[^>]*class="chat-subagent-icon"/);
+  assert.doesNotMatch(bar(both), /…/);
   assert.doesNotMatch(body(both), /야구 정보 확인|여행 정보 조사/);
   assert.match(body(both), /날씨 조회/);
   const one = tools("completed", "running");
@@ -328,6 +410,22 @@ test("running main sub-agents render only above the composer; finished ones fold
   assert.match(body(one), /두산 다음 경기 확인/);
   assert.equal(bar(tools("failed", "completed")), "");
   assert.equal(bar([]), "");  // not busy / stop / session change: callers pass []
+  const longSummary = `잠실 직관 코스 계획 ${"긴공개요약".repeat(40)} <script>public</script>`;
+  const scoped = bar(toolItems([
+    tl("public", "ask_course", "running", { kind: "sub_agent", summary: longSummary, title: "PRIVATE_TITLE", detail: { args: { secret: "PRIVATE_ARGS" }, result: "PRIVATE_RESULT", messages: [{ role: "ai", content: "PRIVATE_MESSAGE" }] } }),
+    tl("nested", "ask_place_data", "running", { kind: "sub_agent", parentId: "public", summary: "PRIVATE_NESTED" }),
+    tl("unknown", "unmapped_agent", "running", { kind: "sub_agent" }),
+  ]));
+  assert.match(scoped, /class="chat-subagent-role">코스 생성·수정/);
+  assert.match(scoped, /class="chat-subagent-summary"> · 잠실 직관 코스 계획/);
+  assert.ok(scoped.includes(longSummary.replaceAll("<", "&lt;").replaceAll(">", "&gt;")));
+  assert.match(scoped, /class="chat-subagent-role">정보 조회/);
+  assert.equal((scoped.match(/<li>/g) ?? []).length, 2);
+  assert.doesNotMatch(scoped, /PRIVATE_|unmapped_agent|<script>|<details|title=/);
+  const statusStyles = readFileSync(join(frontend, "styles/chat-progress.css"), "utf8").split("/* 입력창 바로 위")[1];
+  assert.match(statusStyles, /minmax\(0, 1fr\)/);
+  assert.match(statusStyles, /overflow-wrap: anywhere/);
+  assert.doesNotMatch(statusStyles, /text-overflow|overflow: hidden|animation/);
   // saved stopped/failed history (no live): unresolved running sub-agent stays folded in the body
   assert.match(renderToStaticMarkup(React.createElement(ChatProgress, { items: both })), /야구 정보 확인 \(서브에이전트\) 조회 중.*여행 정보 조사 \(서브에이전트\) 조회 중/s);
   for (const f of ["components/chat-workspace.tsx", "components/chat-popup.tsx"]) {

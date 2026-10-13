@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import { useChat } from "./chat-provider";
 import { CapBot, Icon } from "./icons";
+import { useMemberAuth } from "@/lib/member-auth";
 
 const groups = [
   {
@@ -30,7 +31,7 @@ const groups = [
     items: [
       { title: "자유 게시판", href: "/community" },
       { title: "팀 게시판", href: "/community/teams" },
-      { title: "승부 예측", href: "/community/predictions" },
+      { title: "환상게임", href: "/fantasy" },
     ],
   },
 ] as const;
@@ -41,6 +42,7 @@ function HeaderMenuContent({ pathname }: { pathname: string }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const { onExpand } = useChat();
+  const { status, user } = useMemberAuth();
 
   useEffect(() => {
     if (!open) return;
@@ -109,6 +111,14 @@ function HeaderMenuContent({ pathname }: { pathname: string }) {
                 <span>챗봇</span><Icon className="header-menu-arrow" name="arrow" size={16} />
               </button>
             </li>
+            {status === "authenticated" && user?.is_active && user.is_staff && (
+              <li>
+                <Link className="header-menu-category" href="/admin" aria-label="Admin 대시보드" aria-current={pathname === "/admin" || pathname.startsWith("/admin/") ? "page" : undefined} onClick={closeMenu}>
+                  <span className="header-menu-icon"><Icon name="menu" size={20} /></span>
+                  <span>Admin</span><Icon className="header-menu-arrow" name="arrow" size={16} />
+                </Link>
+              </li>
+            )}
           </ul>
         </nav>
       )}

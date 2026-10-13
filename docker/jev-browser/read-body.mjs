@@ -1,0 +1,120 @@
+// Observed DOM only. CDP uses upstream transport, never the model/browser agent.
+import { setTimeout as delay } from 'node:timers/promises';
+import { CdpBrowser } from './jev/src/cdp/browser.ts';
+
+const [url, profile] = process.argv.slice(2);
+const cancel = new AbortController();
+const signal = AbortSignal.any([cancel.signal, AbortSignal.timeout(44000)]);
+for (const event of ['SIGTERM', 'SIGINT']) process.once(event, () => cancel.abort());
+let browser, socket;
+const frames = [], limitations = [], contexts = new Map();
+const extract = `(() => {
+ const candidates = [...document.querySelectorAll('article,main,[role="main"],.se-main-container,#postViewArea,.entry-content,.article-view,.tt_article_useless_p_margin')];
+ const root = candidates.sort((a,b) => b.innerText.length-a.innerText.length)[0] || document.body;
+ const body = root?.innerText || '';
+ const excluded = [...(root?.querySelectorAll('nav,header,footer,aside,[role="navigation"],.adsbygoogle') || [])];
+ const styles = excluded.map(n=>[n,n.style.display]);
+ excluded.forEach(n=>n.style.display='none');
+ const text = root?.innerText || '';
+ styles.forEach(([n,display])=>n.style.display=display);
+ const links = [...document.querySelectorAll('iframe')].slice(0,24).map(n=>{
+   const label=n.id+' '+n.name+' '+n.className+' '+n.title+' '+n.src;
+   const auxiliary=!n.src || n.src==='about:blank' || /(?:^|[^a-z0-9])(?:ad[sx]?|advertisement|doubleclick|banner|twitter|facebook)(?:$|[^a-z0-9])/i.test(label);
+   const material=!candidates.length || root?.contains(n) || /article|postview|mainframe/i.test(label);
+   return {url:n.src,role:auxiliary?'auxiliary':/map/i.test(label)?'map':material?'article':'auxiliary'};
+ });
+ const heading = [...document.querySelectorAll('h1,h2,[role="heading"]')].find(n=>n.innerText?.trim())?.innerText.trim() || '';
+ return {body:text.slice(0,2097153),heading,url:location.href,title:document.title,article:!!candidates.length,links,ready:document.readyState};
+})()`;
+try {
+  browser = await CdpBrowser.launch({
+    executablePath: process.env.CHROME_PATH || '/usr/bin/chromium', profileDir: profile,
+    signal, retryProfile: false,
+  }, 'deny');
+  socket = browser.socket;
+  socket.onEvent('Runtime.executionContextCreated',(p,s)=> {
+    if(p.context.auxData?.isDefault) contexts.set(`${s}:${p.context.id}`,{session:s,id:p.context.id,frame:p.context.auxData.frameId});
+  });
+  socket.onEvent('Runtime.executionContextDestroyed',(p,s)=>contexts.delete(`${s}:${p.executionContextId}`));
+  socket.onEvent('Runtime.executionContextsCleared',(_,s)=> {for(const [k,c] of contexts) if(c.session===s) contexts.delete(k);});
+  const attached = new Set();
+  async function attach(target) {
+    if(attached.has(target.targetId)) return;
+    attached.add(target.targetId);
+    const {sessionId}=await socket.call('Target.attachToTarget',{targetId:target.targetId,flatten:true});
+    await socket.call('Page.enable',{},sessionId);
+    await socket.call('Runtime.enable',{},sessionId);
+    return sessionId;
+  }
+  const {targetInfos}=await socket.call('Target.getTargets');
+  const session=await attach(targetInfos.find(t=>t.type==='page'));
+  const nav=await socket.call('Page.navigate',{url},session);
+  if(nav.errorText) throw Error('error');
+  for(let i=0;i<60;i++) {
+    const ready=await socket.call('Runtime.evaluate',{expression:'document.readyState',returnByValue:true},session);
+    if(ready.result?.value==='complete') break;
+    if(i===59) limitations.push('document_load_timeout');
+    await delay(250);
+  }
+  // Bounded lazy-content settling, not link traversal or viewport-only extraction.
+  for(let pass=0;pass<6;pass++) {
+    const targets=await socket.call('Target.getTargets');
+    for(const t of targets.targetInfos.filter(t=>t.type==='iframe').slice(0,24)) {
+      try { await attach(t); }
+      catch { frames.push({role:'unknown',status:'error',url:t.url||'',title:''}); }
+    }
+    for(const c of [...contexts.values()].slice(0,24)) {
+      await socket.call('Runtime.evaluate',{contextId:c.id,expression:'window.scrollBy(0,window.innerHeight)',returnByValue:true},c.session).catch(()=>{});
+    }
+    await delay(300);
+  }
+  const used=new Set(), expected=[], depths=new Map();
+  function recordDepth(tree, depth=0) {
+    if(!tree?.frame) return;
+    depths.set(tree.frame.id,depth);
+    for(const child of tree.childFrames||[]) recordDepth(child,depth+1);
+  }
+  const tree=await socket.call('Page.getFrameTree',{},session);
+  recordDepth(tree.frameTree);
+  for(const c of [...contexts.values()].slice(0,24)) {
+    if((depths.get(c.frame)||0)>6) {limitations.push('frame_depth_limit');continue;}
+    try {
+      const response=await socket.call('Runtime.evaluate',{contextId:c.id,expression:extract,returnByValue:true},c.session);
+      const data=response.result?.value;
+      if(!data || typeof data.body!=='string') throw Error('invalid_context');
+      expected.push(...data.links.map(link=>({...link,parent_url:data.url})));
+      const role=data.article?'article':/map/i.test(data.url)?'map':c.frame===nav.frameId?'document':'auxiliary';
+      const blocked=/^(?:\s*(?:access denied|403 forbidden|로봇이 아닙니다))/i.test(data.body) || /^(?:Just a moment|Checking your browser)/i.test(data.title) || /^(?:verify you are human|Checking your browser)[.!…\s]*$/i.test(data.heading) || /chrome-error:\/\//.test(data.url) || /^(ERROR: The requested URL could not be retrieved)/.test(data.title);
+      frames.push({role,status:blocked?'blocked':'ok',url:data.url,title:data.title,body:blocked?'':data.body});
+    } catch { frames.push({role:c.frame===nav.frameId?'document':'unknown',status:'error',url:''}); }
+  }
+  if(contexts.size>24) limitations.push('frame_limit');
+  for(const frame of expected) {
+    const matches=frames.filter(f=>f.url===frame.url || f.url.split('#')[0]===frame.url.split('#')[0]);
+    const observed=matches.find(f=>f.status==='ok') || matches[0];
+    if(observed && frame.role==='article' && observed.status==='ok') observed.role='article';
+    if(observed && frame.role==='map' && observed.status==='ok') observed.role='map';
+    const container=expected.some(child=>child.parent_url===frame.url && child.role==='article');
+    if(frame.url && (!observed || observed.status!=='ok' || (frame.role==='article' && !observed.body && !container))) {
+      frames.push({...frame,status:observed?.status==='blocked'?'blocked':'missing'});
+      if(frame.role==='article') limitations.push('material_article_frame_missing');
+    }
+  }
+  signal.throwIfAborted();
+  const articles=frames.filter(f=>f.role==='article' && f.status==='ok');
+  const selected=frames.filter(f=>f.status==='ok' && typeof f.body==='string' && (f.role==='article'||f.role==='map'||(!articles.length && f.role==='document')));
+  const body=selected.map(f=>f.body).filter(text=>{if(!text||used.has(text))return false;used.add(text);return true;}).join('\n\n');
+  if(frames.some(f=>f.role==='document' && f.status==='error')) limitations.push('main_context_failed');
+  const main=frames.find(f=>f.role==='document') || selected[0];
+  if(selected.some(f=>f.body.length>2097152)) throw Error('overflow');
+  if(Buffer.byteLength(body)>2097152) throw Error('overflow');
+  if(!body && frames.some(f=>f.status==='blocked')) throw Error('blocked');
+  if(!body) limitations.push('no_observed_body');
+  const result={schema_version:1,extractor_version:'jev-dom-v1',status:limitations.length?'partial':'ok',requested_url:url,final_url:main?.url||url,source_url:main?.url||url,title:main?.title||'',body,source_kind:'rendered_dom_snapshot',collected_at:new Date().toISOString(),frames:frames.map(({body,...f})=>({...f,chars:body?.length||0})),limitations};
+  if(Buffer.byteLength(JSON.stringify(result))>2097152) throw Error('overflow');
+  console.log(JSON.stringify(result));
+} catch(error) {
+  console.log(JSON.stringify({status:cancel.signal.aborted?'cancelled':signal.aborted||/timed out/i.test(error.message)?'timeout':['timeout','overflow','blocked'].includes(error.message)?error.message:'error',source_url:url}));
+} finally {
+  await browser?.close();
+}

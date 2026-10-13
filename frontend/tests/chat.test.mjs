@@ -15,21 +15,34 @@ const scratch = mkdtempSync(join(tmpdir(), "kbo-chat-test-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 mkdirSync(join(scratch, "node_modules", "server-only"), { recursive: true });
 writeFileSync(join(scratch, "node_modules", "server-only", "index.js"), "module.exports = {};\n");
-for (const name of ["types", "validation", "demo", "prompt", "server"]) {
+mkdirSync(join(scratch, "chat"));
+writeFileSync(join(scratch, "course-directions.js"), ts.transpileModule(readFileSync(join(frontend, "lib/course-directions.ts"), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText);
+for (const name of ["types", "course", "validation", "demo", "prompt", "server"]) {
   const source = readFileSync(join(frontend, "lib", "chat", `${name}.ts`), "utf8");
   const { outputText } = ts.transpileModule(source, {
     fileName: `${name}.ts`,
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   });
-  writeFileSync(join(scratch, `${name}.js`), outputText);
+  writeFileSync(join(scratch, "chat", `${name}.js`), outputText);
 }
-const requireTestModule = createRequire(join(scratch, "entry.cjs"));
+const requireTestModule = createRequire(join(scratch, "chat", "entry.cjs"));
 const { parseChatRequest, ChatError } = requireTestModule("./validation.js");
 const { createChatReply, getChatStatus, extractOpenAIReply } = requireTestModule("./server.js");
 const { MAX_HISTORY_MESSAGES, MAX_MESSAGE_LENGTH, MAX_REPLY_LENGTH } = requireTestModule("./types.js");
 const { CHAT_INSTRUCTIONS } = requireTestModule("./prompt.js");
 
 const question = { messages: [{ role: "user", content: "잠실 직관 코스를 추천해줘" }] };
+test("selected place survives the request boundary while stale duplicate metadata cannot override a visit", () => {
+  const place = { name: "선택한 공원", category: "WALK", phase: "BEFORE", lat: 37.51, lng: 127.08, visitId: "park", label: "1" };
+  const current = { places: [], stadiumCode: "JAMSIL", travelMode: "walk", legModes: {}, writerState: { title: "", origin: null, completed: false }, selectedPlace: place };
+  const parse = value => parseChatRequest({ ...question, context: { currentCourse: value } }).context.currentCourse;
+  assert.deepEqual(parse(current).selectedPlace, place);
+  assert.deepEqual(parse(current).places, []);
+  assert.deepEqual(parse({ ...current, places: [place], selectedPlace: { ...place, name: "오래된 이름", category: "CAFE" } }).selectedPlace, place);
+  for (const selectedPlace of [null, {}, { ...place, lat: NaN }, { ...place, category: "OTHER" }, { ...place, visitId: "" }]) {
+    assert.throws(() => parse({ ...current, selectedPlace }), ChatError);
+  }
+});
 // Deliberately synthetic: tests never load a real .env or contact a provider.
 const secret = "unit-test-synthetic-key-not-a-real-credential";
 const openaiEnv = { CHAT_PROVIDER: "openai", OPENAI_API_KEY: secret, OPENAI_MODEL: "gpt-6-luna" };

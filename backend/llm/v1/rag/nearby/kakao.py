@@ -27,6 +27,8 @@ import re
 import urllib.parse
 import urllib.request
 
+from llm.service.chat_runs import Stopped, check_cancelled
+
 log = logging.getLogger(__name__)
 
 RADIUS_M = 2500
@@ -78,12 +80,16 @@ def _cache():
 
 def _get(path, params, fetch=None):
     """카카오 로컬 API 한 번. fetch 는 테스트용 주입 (url -> dict)."""
+    check_cancelled()
     url = f"{BASE}/{path}.json?{urllib.parse.urlencode(params)}"
     if fetch:
-        return fetch(url)
-    req = urllib.request.Request(url, headers={"Authorization": f"KakaoAK {_key()}"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as res:   # noqa: S310 — 고정된 카카오 도메인
-        return json.loads(res.read().decode("utf-8"))
+        data = fetch(url)
+    else:
+        req = urllib.request.Request(url, headers={"Authorization": f"KakaoAK {_key()}"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as res:   # noqa: S310 — 고정된 카카오 도메인
+            data = json.loads(res.read().decode("utf-8"))
+    check_cancelled()
+    return data
 
 
 def haversine_m(a_lat, a_lng, b_lat, b_lng):
@@ -104,16 +110,22 @@ def resolve_stadium(code, fetch=None):
     query = STADIUM_QUERY.get(code)
     if not query:
         return None
+    from baseball.stadium_locations import reviewed_venue
+    point = reviewed_venue(code)
+
+    def coordinates(result):
+        return {**result, "lat": point["lat"], "lng": point["lng"]} if point else result
+
     cache, ck = _cache(), f"kakao:stadium:{code}"
     if cache and (hit := cache.get(ck)):
-        return hit
+        return coordinates(hit)
     data = _get("keyword", {"query": query, "size": 15, "sort": "accuracy"}, fetch)
     compact = lambda v: re.sub(r"[\s-]", "", v or "").lower().replace("kia", "기아")   # noqa: E731
     want = compact(query).removeprefix("인천")
     for d in data.get("documents") or []:
         if "야구장" in (d.get("category_name") or "") and want in compact(d.get("place_name")):
-            out = {"name": d["place_name"], "lat": float(d["y"]), "lng": float(d["x"]),
-                   "address": d.get("road_address_name") or d.get("address_name") or ""}
+            out = coordinates({"name": d["place_name"], "lat": float(d["y"]), "lng": float(d["x"]),
+                               "address": d.get("road_address_name") or d.get("address_name") or ""})
             if cache:
                 cache.set(ck, out, 24 * 60 * 60)
             return out
@@ -147,6 +159,7 @@ def _normalize(kind, doc, stadium):
 
 def nearby(code, kind, fetch=None) -> list[dict]:
     """구장 반경 2.5km 안의 한 종류 장소 (가까운 순). 키가 없거나 실패하면 []."""
+    check_cancelled()
     if kind not in SPECS or not (fetch or enabled()):
         return []
     cache, ck = _cache(), f"kakao:nearby:{code}:{kind}"
@@ -169,6 +182,8 @@ def nearby(code, kind, fetch=None) -> list[dict]:
                 if (data.get("meta") or {}).get("is_end", True):
                     break
         out = sorted((p for p in found.values() if p["distance"] <= RADIUS_M), key=lambda p: p["distance"])
+    except Stopped:
+        raise
     except Exception:
         log.exception("kakao nearby failed: %s %s", code, kind)
         return []

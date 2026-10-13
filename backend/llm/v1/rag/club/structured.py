@@ -1,6 +1,6 @@
 """[club] 순위·일정은 RAG 대신 DB 직접 조회 (노션 설계의 SCHEDULE_RANK 인텐트).
 
-rag_test/structured.py 를 Django 용으로 옮긴 것 (DB 접속 인자 대신 django.db.connection 사용).
+rag_test/structured.py의 정형 응답을 Qdrant 문서에서 읽는다.
 
 검색으로 찾으면 "다음 홈경기"처럼 오늘 날짜로 계산해야 하는 질문을 못 푼다.
 여기서는 청크 본문을 정규식으로 구조화한 뒤, 파이썬이 직접 고르고 정렬한다.
@@ -8,7 +8,6 @@ rag_test/structured.py 를 Django 용으로 옮긴 것 (DB 접속 인자 대신 
 import re
 from datetime import date, datetime, timedelta
 
-from django.db import connection
 
 from .router import PLACE_ALIAS
 
@@ -87,9 +86,35 @@ def team_in(question):
     return m[0] if m else None
 
 
+class DateRequestError(ValueError):
+    """A date was supplied but cannot be used; never treat it as no date."""
+
+
+def _requested_day(year, month, day):
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError as exc:
+        raise DateRequestError("존재하지 않는 날짜예요. 방문 날짜를 다시 입력해 주세요.") from exc
+
+
 def date_in(question, today):
-    """질문 속 날짜 → 'YYYY-MM-DD' (오늘/내일/모레/N월 N일). 없으면 None"""
+    """질문 속 날짜 → ISO 날짜. 월 없는 '15일'은 한국 기준 이번 달이다."""
     t = date.fromisoformat(today)
+    full = re.search(r"(?<!\d)(\d{4})\s*(?:년\s*|[-/.])\s*(\d{1,2})\s*(?:월\s*|[-/.])\s*(\d{1,2})(?:\s*일)?(?!\d)", question)
+    if full:
+        return _requested_day(*map(int, full.groups()))
+    # Explicit dates win over incidental '오늘' (e.g. 오늘 말고 10월 15일).
+    if m := RE_MD.search(question):
+        return _requested_day(t.year, int(m[1]), int(m[2]))
+    days = re.finditer(
+        r"(?<![\d./-])(?:(이번\s*달|다다음\s*달|다음\s*달|지난\s*달)\s*)?"
+        r"(\d{1,2})\s*일(?!\s*(?:동안|간|째|차|전|후|뒤|이내|정))", question)
+    for m in days:
+        if re.search(r"\d+\s*박\s*$", question[:m.start()]):
+            continue  # 2박 3일 is a duration, not the third day of the month.
+        month_offset = {"이번달": 0, "다음달": 1, "다다음달": 2, "지난달": -1}.get(re.sub(r"\s", "", m[1] or ""), 0)
+        year, month = divmod(t.year * 12 + t.month - 1 + month_offset, 12)
+        return _requested_day(year, month + 1, int(m[2]))
     if "오늘" in question:
         return today
     if "그제" in question or "그저께" in question:
@@ -100,16 +125,13 @@ def date_in(question, today):
         return (t + timedelta(days=1)).isoformat()
     if "모레" in question:
         return (t + timedelta(days=2)).isoformat()
-    m = RE_MD.search(question)
-    return f"{t.year}-{int(m[1]):02d}-{int(m[2]):02d}" if m else None
+    return None
 
 
 def _rows(category):
-    with connection.cursor() as cur:
-        cur.execute(
-            """SELECT content, left(coalesce(metadata->'metadata'->>'updated_at', metadata->>'updated_at', ''), 10) AS updated_at
-               FROM llm_documentchunk WHERE metadata->>'category' = %s""", [category])
-        return [{"content": c, "updated_at": u} for c, u in cur.fetchall()]
+    from llm.vector_store import iter_documents, legacy_row
+    return [{"content": row["content"], "updated_at": row["updated_at"]}
+            for row in map(legacy_row, iter_documents(categories=[category]))]
 
 
 def standings():

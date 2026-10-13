@@ -24,7 +24,8 @@ ALL_TOOL_NAMES = {
     "get_ticket_prices", "get_ticket_policies", "get_transport", "get_food_stores",
     "get_facilities", "get_stadium_contents", "get_seat_maps", "search_places",
     "search_courses", "get_course", "search_community_posts", "get_prediction_games",
-    "search_players", "get_directions", "search_tourism", "get_weather",
+    "search_players", "get_directions", "search_tourism", "get_weather", "search_highlight_scenes",
+    "search_highlight_rag", "select_highlight_scenes",
     "get_baseball_schema", "execute_baseball_select",
     "search_documents_tool", "search_kbo_documents",
     "get_ticket_policy", "search_nearby_places", "plan_course",
@@ -34,7 +35,7 @@ ALL_TOOL_NAMES = {
 def fake_result(guard="PASS", nouls=None):
     nouls = nouls or {}
     return SimpleNamespace(
-        choices={"guard": SimpleNamespace(choice=guard)},
+        choices={"guard": SimpleNamespace(choice=guard), "course_request": SimpleNamespace(choice="NONE")},
         nouls={name: SimpleNamespace(noul=nouls.get(name, 0.0)) for name in classifier.CAPABILITIES},
     )
 
@@ -58,7 +59,8 @@ class ChainToolNamesTest(unittest.TestCase):
         self.assertEqual(set(classifier.CAPABILITIES), set(classifier.CAPABILITY_INSTRUCTIONS))
         for cap, names in CAPABILITY_TOOLS.items():
             with self.subTest(capability=cap):
-                self.assertEqual(set(names) - ALL_TOOL_NAMES - {"ask_baseball", "ask_travel_research", "ask_place_data"}, set())
+                self.assertEqual(set(names) - ALL_TOOL_NAMES - {"ask_baseball", "ask_travel_research", "ask_place_data", "ask_course",
+                                                                "ask_web_research", "ask_highlight"}, set())
 
     def test_serializer_sub_agent_names_match_specialists(self):
         from llm.serializer.message import SUB_AGENT_TOOLS
@@ -107,7 +109,7 @@ class ClassifyTest(unittest.TestCase):
 
     def test_pass_selects_capabilities_above_threshold(self):
         decision, _ = self.classify(fake_result(nouls={"schedule": 0.9, "weather": 0.4}))
-        self.assertEqual(decision, {"allowed": True, "capabilities": ["schedule"]})
+        self.assertEqual(decision, {"allowed": True, "capabilities": ["schedule"], "course_request": "NONE"})
 
     def test_non_pass_has_no_capabilities(self):
         decision, _ = self.classify(fake_result("NON_PASS", nouls={"schedule": 0.9}))
@@ -128,10 +130,11 @@ if __name__ == "__main__":
 
 
 class V2PlanCourseDescriptionTest(unittest.TestCase):
-    def test_v2_copy_drops_map_card_promise_without_mutating_v1(self):
+    def test_v2_description_includes_current_course_map_and_card_updates(self):
         from llm.tools.assistant import build_specialized_tools
         from llm.v2.agent import chain
-        self.assertNotIn("지도", chain.V2_PLAN_COURSE_DESCRIPTION)
-        self.assertNotIn("카드", chain.V2_PLAN_COURSE_DESCRIPTION)
+        self.assertIn("지도", chain.V2_PLAN_COURSE_DESCRIPTION)
+        self.assertIn("카드", chain.V2_PLAN_COURSE_DESCRIPTION)
+        self.assertIn("수정하지 않은 장소는 유지", chain.V2_PLAN_COURSE_DESCRIPTION)
         v1 = next(t for t in build_specialized_tools() if t.name == "plan_course")
         self.assertIn("지도", v1.description)

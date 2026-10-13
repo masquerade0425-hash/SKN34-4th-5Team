@@ -88,7 +88,7 @@ test("mypage validates feedback deep links and mounts the shared panel only for 
       useRouter: () => ({ push: (...args) => pushes.push(args) }), useSearchParams: () => new URLSearchParams("tab=feedback"),
       memberFetch: async () => Response.json({ balance: 0, transactions: [] }),
       useRoutesReady: () => true, useRoutes: () => [], useRoutesError: () => null, useLikedRoutes: () => [],
-      MEMBER_LEVELS: { 1: { label: "1단계", image: "/images/member-levels/rank-bronze.svg" }, 2: { label: "2단계", image: "/images/member-levels/rank-silver.svg" }, 3: { label: "3단계", image: "/images/member-levels/rank-gold.svg" } }, teamBoards: [], memberRoleLabel: () => "회원", nextNicknameChangeAt: () => null, styles,
+      MEMBER_LEVELS: { 1: { label: "루키", image: "/images/member-levels/rank-bronze.svg" }, 2: { label: "팀 벤치", image: "/images/member-levels/rank-silver.svg" }, 3: { label: "주전", image: "/images/member-levels/rank-gold.svg" } }, teamBoards: [], memberRoleLabel: () => "회원", nextNicknameChangeAt: () => null, styles,
       AdminFeedbackPanel: noop, AdminMembersPanel: noop, AdminPostsPanel: noop, AdminReportsPanel: noop,
       MemberPosts: noop, MemberAccountSettings: noop, NicknameChangeButton: noop, PasswordChangeButton: noop,
       ProfilePhotoEditor: noop, RouteCard: noop, logoutMember: noop, memberError: noop,
@@ -127,7 +127,7 @@ test("mypage loads point balance and transactions and exposes retry on API failu
         : Response.json({ balance: 125, level: 1, transactions: [{ amount: 25, transaction_type: "ACTIVITY_EARNED", description: "게시글 작성 보상", created_at: "2026-10-10T12:00:00Z" }] });
     },
     useRoutesReady: () => true, useRoutes: () => [], useRoutesError: () => null, useLikedRoutes: () => [],
-    MEMBER_LEVELS: { 1: { label: "1단계", image: "/images/member-levels/rank-bronze.svg" }, 2: { label: "2단계", image: "/images/member-levels/rank-silver.svg" }, 3: { label: "3단계", image: "/images/member-levels/rank-gold.svg" } }, teamBoards: [], memberRoleLabel: () => "회원", nextNicknameChangeAt: () => null, styles,
+    MEMBER_LEVELS: { 1: { label: "루키", image: "/images/member-levels/rank-bronze.svg" }, 2: { label: "팀 벤치", image: "/images/member-levels/rank-silver.svg" }, 3: { label: "주전", image: "/images/member-levels/rank-gold.svg" } }, teamBoards: [], memberRoleLabel: () => "회원", nextNicknameChangeAt: () => null, styles,
     AdminFeedbackPanel: noop, AdminMembersPanel: noop, AdminPostsPanel: noop, AdminReportsPanel: noop,
     MemberPosts: noop, MemberAccountSettings: noop, NicknameChangeButton: noop, PasswordChangeButton: noop,
     ProfilePhotoEditor: noop, RouteCard: noop, logoutMember: noop, memberError: value => value.detail,
@@ -182,9 +182,14 @@ test("member and admin profiles show server-provided levels, never invent a leve
       const badge = find(tree, node => node.props?.className === 'levelBadge');
       if ([1, 2, 3].includes(level)) {
         assert.equal(badge.props.src, policy.MEMBER_LEVELS[level].image);
-        assert.match(text(tree), new RegExp(`${level}단계`));
+        assert.match(text(tree), new RegExp(({ 1: "루키", 2: "팀 벤치", 3: "주전" })[level]));
+        const progress = find(tree, node => node.type === 'progress');
+        assert.equal(progress.props.max, level === 1 ? 501 : level === 2 ? 500 : 1);
+        assert.equal(progress.props.value, level === 1 ? 100 : level === 2 ? 0 : 1);
+        assert.match(text(tree), level === 1 ? /팀 벤치까지 401P/ : level === 2 ? /주전까지 901P/ : /최고 등급 주전 달성/);
       } else {
         assert.equal(badge, undefined);
+        assert.equal(find(tree, node => node.type === 'progress'), undefined);
         assert.match(text(tree), /등급을 불러오지 못했어요/);
       }
       hooks.unmount();

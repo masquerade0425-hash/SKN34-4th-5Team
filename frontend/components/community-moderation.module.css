@@ -1,3 +1,27 @@
+.submissions { min-width: 0; padding-block: 32px 64px; color: var(--foreground); }
+.submissions h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 800; margin: 10px 0 14px; }
+.submissionListHeading { font-size: 20px; font-weight: 750; margin: 28px 0 16px; }
+.submissionCard { padding: 24px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--background); overflow-wrap: anywhere; }
+.submissionHeader { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.submissionHeader h3 { min-width: 0; font-size: 18px; font-weight: 700; }
+.submissionStatus { display: inline-flex; padding: 5px 10px; border-radius: 6px; background: var(--soft); color: #47566b; font-size: 12px; font-weight: 650; line-height: 1.6; }
+.submissionStatus[data-state="approved"] { color: #216046; background: #edf7f1; }
+.submissionStatus[data-state="pending"], .submissionStatus[data-state="review"] { color: #805310; background: #fff5e2; }
+.submissionStatus[data-state="error"], .submissionStatus[data-state="rejected"] { color: #9a3434; background: #fff0f0; }
+.submissionText { margin-top: 16px; white-space: pre-wrap; line-height: 1.85; }
+.submissionActions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.submissionActions .deleteButton { color: #9a3434; border-color: #e6bebe; }
+.submissionActions .deleteButton:hover:not(:disabled) { background: #fff0f0; border-color: #9a3434; transform: none; }
+.submissions button:disabled { background: #eef1f5; color: #66758a; border-color: #dce3ed; box-shadow: none; transform: none; }
+.commentInput { display: block; width: 100%; min-height: 112px; margin-top: 16px; padding: 12px; resize: vertical; border: 1px solid #bdc8d7; border-radius: 10px; background: var(--background); color: var(--foreground); line-height: 1.7; }
+.submissions .empty { border: 1px solid var(--border); border-radius: 12px; }
+.submissions .empty > a { margin-top: 18px; }
+.submissions :is(a, button, textarea):focus-visible { outline: 3px solid #78a9ff; outline-offset: 3px; }
+@media (max-width: 640px) {
+  .submissions { padding-block: 24px 40px; }
+  .submissionCard { padding: 18px; }
+  .submissionActions > :is(a, button) { flex: 1 1 140px; }
+}
 .panel { min-width: 0; color: var(--foreground); }
 .modeSettings { border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-bottom: 28px; background: var(--background); }
 .modeSettings h3 { font-size: 18px; margin-bottom: 8px; }

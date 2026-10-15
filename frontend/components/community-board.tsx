@@ -106,7 +106,7 @@ export function CommunityBoard({ section, teamCode = "", postId = "", category =
     {section === "teams" && <nav className={styles.teamTabs} aria-label="팀 게시판 선택"><Link href={getTeamBoardHref()} aria-current={!team ? "page" : undefined}>전체</Link>{teamBoards.map(item => <Link key={item.code} href={getTeamBoardHref(item.code)} aria-current={team?.code === item.code ? "page" : undefined}>{item.shortName}</Link>)}</nav>}
     {community.error && community.posts.length > 0 && <p role="alert">{community.error} <button type="button" onClick={() => void retryCommunityPosts()}>다시 시도</button></p>}
     {postId && detail.key === detailKey && detail.loading && <p role="status">게시글을 불러오고 있어요.</p>}
-    {postId && detail.key === detailKey && detail.error && <p role="alert">{detail.error} <Link href={listHref}>목록으로</Link></p>}
+    {postId && detail.key === detailKey && detail.error && <div className={styles.postNotice}><p role="alert">{detail.error}</p><div className={styles.noticeActions}><Link className="button button-secondary" href={listHref}>목록으로</Link>{user && <Link className="button button-primary" href="/community/submissions">내 검사 상태</Link>}</div></div>}
     {selectedPost && <article className={styles.postDetail}>
       <header className={styles.postHeader}>
         <h2 className={styles.postHeading}>{section === "teams" && <strong>{getTeamBoard(selectedPost.teamCode)?.shortName}</strong>}{categoryLink(selectedPost.category)}<span>{selectedPost.title}<PostCommentCount count={selectedPost.commentCount} /></span></h2>

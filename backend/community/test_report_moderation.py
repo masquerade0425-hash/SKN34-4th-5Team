@@ -313,7 +313,11 @@ class ReportModerationTests(APITestCase):
         with self.captureOnCommitCallbacks(execute=False):
             response = self.client.patch(f'/api/v1/community/posts/{self.post.pk}/',
                                          {'content': '실제 본문 수정'}, format='json')
+<<<<<<< HEAD
         self.assertEqual(response.status_code, 202)
+=======
+        self.assertEqual(response.status_code, 200)
+>>>>>>> 028d5a1adba72e38a52afb9e630332c55aa76fe1
         self.post.refresh_from_db()
         self.assertEqual(self.post.content_revision, 2)
         self.assertFalse(finish(ref, result=([], {})))

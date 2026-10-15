@@ -64,10 +64,65 @@ test("conflicting review displays error and never retries approval automatically
   assert.equal(h.values[3], "내용이 변경되었습니다.");
 });
 
+function submissionContent(h, state) {
+  const screen = h.render(h.exports.CommunitySubmissions);
+  const element = nodes(screen).find(node => typeof node.type === "function");
+  return h.render(element.type, element.props, state);
+}
+
+test("member submissions distinguish loading, empty posts/comments and request errors", () => {
+  const h = harness();
+  const loading = submissionContent(h, [[], [], "", 0, false, true]);
+  assert.ok(nodes(loading).some(n => n.props.role === "status" && /불러오고/.test(n.props.children)));
+  assert.equal(nodes(loading).some(n => /등록한.*없어요/.test(n.props.children)), false);
+  assert.equal(nodes(loading).find(n => n.type === "button").props.disabled, true);
+  const refreshing = submissionContent(h, [[], [{ id: 3, revision: 1, content: "댓글", moderationStatus: "pending" }], "", 0, false, true]);
+  assert.ok(nodes(refreshing).some(n => typeof n.type === "function" && n.props.comment?.id === 3), "refresh keeps the comment editor mounted and preserves its draft");
+  assert.equal(nodes(refreshing).some(n => /등록한.*없어요/.test(n.props.children)), false);
+  const empty = submissionContent(h, [[], [], "", 0, false, false]);
+  assert.deepEqual(nodes(empty).filter(n => n.type === "h2").map(n => n.props.children), ["내 게시글 검사", "내 댓글 검사"]);
+  assert.ok(nodes(empty).some(n => n.props.children === "등록한 게시글이 없어요"));
+  assert.ok(nodes(empty).some(n => n.props.children === "등록한 댓글이 없어요"));
+  const failed = submissionContent(h, [[], [], "연결 실패", 0, false, false]);
+  assert.ok(nodes(failed).some(n => n.props.role === "alert" && n.props.children === "연결 실패"));
+  assert.equal(nodes(failed).some(n => /등록한.*없어요/.test(n.props.children)), false);
+});
+
+test("member cards use padded headings, wrapping status and distinct edit/delete actions", () => {
+  const h = harness();
+  const tree = submission(h);
+  assert.ok(nodes(tree).some(n => n.type === "article" && n.props.className === "submissionCard"));
+  assert.ok(nodes(tree).some(n => n.type === "h3" && n.props.children === "비공개"));
+  assert.ok(nodes(tree).some(n => n.props.className === "submissionStatus" && n.props["data-state"] === "pending"));
+  assert.ok(nodes(tree).some(n => n.props.href === "/community/write?edit=private-1" && /button-primary/.test(n.props.className)));
+  assert.ok(nodes(tree).some(n => n.type === "button" && n.props.children === "삭제" && /deleteButton/.test(n.props.className)));
+  assert.equal(nodes(tree).some(n => n.props.children === "게시판에서 확인"), true);
+  const commentTree = submissionContent(h, [[], [{ id: 3, revision: 1, content: "댓글", moderationStatus: "pending" }], "", 0, false, false]);
+  const comment = nodes(commentTree).find(n => typeof n.type === "function" && n.props.comment);
+  const cardTree = h.render(comment.type, comment.props, ["댓글", false, ""]);
+  assert.ok(nodes(cardTree).some(n => n.type === "textarea" && n.props["aria-label"] === "댓글 3 수정" && n.props.className === "commentInput"));
+  assert.ok(nodes(cardTree).some(n => n.type === "button" && n.props.children === "삭제" && /deleteButton/.test(n.props.className)));
+  const css = readFileSync(new URL("../components/community-moderation.module.css", import.meta.url), "utf8");
+  assert.match(css, /\.submissionCard\s*\{[^}]*padding: 24px/);
+  assert.match(css, /\.submissionActions\s*\{[^}]*flex-wrap: wrap/);
+  assert.match(css, /\.submissions :is\(a, button, textarea\):focus-visible/);
+  assert.doesNotMatch(css.match(/\.submissionStatus\s*\{[^}]*\}/)[0], /white-space: nowrap/);
+});
+
+test("unavailable private post notice has padding and actionable styled navigation", () => {
+  const source = readFileSync(new URL("../components/community-board.tsx", import.meta.url), "utf8");
+  assert.match(source, /detail\.error && <div className=\{styles\.postNotice\}/);
+  assert.match(source, /className="button button-secondary" href=\{listHref\}>목록으로/);
+  assert.match(source, /user && <Link className="button button-primary" href="\/community\/submissions"/);
+  const css = readFileSync(new URL("../components/community-board.module.css", import.meta.url), "utf8");
+  assert.match(css, /\.postNotice\s*\{[^}]*padding: 24px/);
+  assert.match(css, /\.noticeActions\s*\{[^}]*flex-wrap: wrap/);
+});
+
 function submission(h, status = "pending", busy = false) {
   const screen = h.render(h.exports.CommunitySubmissions);
   const element = nodes(screen).find(node => typeof node.type === "function");
-  return h.render(element.type, element.props, [[{ id: "private-1", title: "비공개", content: "본문", moderationStatus: status, revision: 1 }], [], "", 0, busy]);
+  return h.render(element.type, element.props, [[{ id: "private-1", title: "비공개", content: "본문", moderationStatus: status, revision: 1 }], [], "", 0, busy, false]);
 }
 
 test("cancelled private post deletion makes zero API calls", async () => {
@@ -162,6 +217,21 @@ test("public fallback instructions keep manual review distinct from provider app
   const tree = card(h);
   assert.ok(nodes(tree).some(node => node.props.children === "선택 사유 확정·비공개 처리"));
   assert.ok(nodes(tree).some(node => typeof node.props.children === "string" && node.props.children.includes("다른 미해제 사유나 확정 사유가 있으면 비공개")));
+});
+
+test("publication succeeds independently of pending checks and UI explains post-check holds", () => {
+  const h = harness();
+  for (const status of ["pending", "error"]) {
+    assert.doesNotMatch(h.exports.moderationLabel[status], /비공개/);
+    assert.ok(nodes(submission(h, status)).some(n => n.props.children === "게시판에서 확인"));
+  }
+  const screen = submissionContent(h, [[], [], "", 0, false, false]);
+  assert.ok(nodes(screen).some(n => typeof n.props.children === "string" && n.props.children.includes("바로 게시")));
+  const editor = readFileSync(new URL("../components/community-post-editor.tsx", import.meta.url), "utf8");
+  const comments = readFileSync(new URL("../components/community-post-bottom.tsx", import.meta.url), "utf8");
+  assert.match(editor, /저장하면 바로 게시됩니다/);
+  assert.doesNotMatch(comments, /검사 완료까지 비공개|재검사 완료까지 비공개/);
+  assert.match(comments, /댓글을 등록했어요\. 사후 검사는 별도로 진행됩니다/);
 });
 
 test("empty results explain the next action without masking request errors", () => {

@@ -9,7 +9,7 @@ import type { TeamCommunityPost } from "@/lib/team-community";
 import { getTeamBoardHref } from "@/lib/team-community";
 import styles from "./community-moderation.module.css";
 
-export const moderationLabel: Record<string, string> = { pending: "비공개 · 검사 대기", review: "운영진 검토 · 자동 검사 오류 시 공개 가능", error: "비공개 · 검사 오류", rejected: "비공개 · 보류 확정", approved: "검사 승인" };
+export const moderationLabel: Record<string, string> = { pending: "사후 검사 대기", review: "운영진 검토 · 자동 검사 오류 시 공개 가능", error: "사후 검사 오류", rejected: "비공개 · 보류 확정", approved: "검사 승인" };
 
 export function AdminContentPreview({ id }: { id: string }) {
   const [post, setPost] = useState<TeamCommunityPost | null>(null);
@@ -44,7 +44,7 @@ export function PrivateCommunityImage({ id }: { id: string }) {
 
 export function CommunitySubmissions() {
   const { user, status } = useMemberAuth();
-  if (!user) return <p>{status === "loading" ? "로그인 확인 중…" : "로그인 후 검사 상태를 확인할 수 있어요."} <Link href="/login">로그인</Link></p>;
+  if (!user) return <section className={styles.submissions}><h1>내 게시 검사 상태</h1><div className={styles.empty}><p role={status === "loading" ? "status" : undefined}>{status === "loading" ? "로그인 확인 중…" : "로그인 후 검사 상태를 확인할 수 있어요."}</p>{status !== "loading" && <Link className="button button-primary" href="/login">로그인</Link>}</div></section>;
   return <SubmissionContent key={user.id} />;
 }
 
@@ -62,7 +62,13 @@ function OwnComment({ comment, refresh }: { comment: CommunityComment; refresh: 
     } catch (cause) { setError(cause instanceof Error ? cause.message : "요청 실패"); }
     finally { setBusy(false); }
   }
-  return <article><p>댓글 #{comment.id} · {moderationLabel[comment.moderationStatus]}</p><textarea aria-label={`댓글 ${comment.id} 수정`} value={content} maxLength={2000} disabled={busy} onChange={event => setContent(event.target.value)} /><div><button disabled={busy || !content.trim()} onClick={() => void mutate(false)}>수정 후 재검사</button> <button disabled={busy} onClick={() => void mutate(true)}>삭제</button></div>{error && <p role="alert">{error}</p>}</article>;
+  return <article className={styles.submissionCard} aria-busy={busy}>
+    <header className={styles.submissionHeader}><h3>댓글 #{comment.id}</h3><span className={styles.submissionStatus} data-state={comment.moderationStatus}>{moderationLabel[comment.moderationStatus]}</span></header>
+    <p className={styles.metadata}>버전 {comment.revision}</p>
+    <textarea className={styles.commentInput} aria-label={`댓글 ${comment.id} 수정`} rows={4} value={content} maxLength={2000} disabled={busy} onChange={event => setContent(event.target.value)} />
+    <div className={styles.submissionActions}><button className="button button-primary" disabled={busy || !content.trim()} onClick={() => void mutate(false)}>수정 후 재검사</button><button className={`button button-secondary ${styles.deleteButton}`} disabled={busy} onClick={() => void mutate(true)}>삭제</button></div>
+    {busy && <p className={styles.hint} role="status">댓글 요청을 처리하고 있어요.</p>}{error && <p className={styles.error} role="alert">{error}</p>}
+  </article>;
 }
 
 function SubmissionContent() {
@@ -71,6 +77,7 @@ function SubmissionContent() {
   const [error, setError] = useState("");
   const [tick, setTick] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   async function removePost(id: string) {
     if (busy || !window.confirm("게시글을 삭제할까요?")) return;
     setBusy(true); setError("");
@@ -82,10 +89,30 @@ function SubmissionContent() {
   }
   useEffect(() => {
     let active = true;
-    void Promise.all([fetchMyCommunityPosts(), fetchMyCommunityComments()]).then(([value, replies]) => { if (active) { setPosts(value); setComments(replies); setError(""); } }).catch(() => { if (active) setError("내 게시글을 불러오지 못했어요."); });
+    setLoading(true);
+    void Promise.all([fetchMyCommunityPosts(), fetchMyCommunityComments()]).then(([value, replies]) => { if (active) { setPosts(value); setComments(replies); setError(""); } }).catch(() => { if (active) setError("내 게시글과 댓글을 불러오지 못했어요."); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [tick]);
-  return <section><h1>내 게시 검사 상태</h1><p>새 글과 수정본은 검사 대기 중 비공개입니다. 자동 검사 오류 시 공개와 운영진 검토를 병행하며, 유해성 판정·이미지 검토·수동 모드는 비공개 검토합니다. 별도 운영 제재나 비공개 부모 글은 공개되지 않습니다.</p><button onClick={() => setTick(value => value + 1)}>상태 새로고침</button>{error && <p role="alert">{error}</p>}{posts.map(post => <article key={post.id} style={{ padding: "1rem 0", borderBottom: "1px solid #ddd" }}><h2>{post.title}</h2><p>{moderationLabel[post.moderationStatus]} · 버전 {post.revision}</p><p style={{ whiteSpace: "pre-wrap" }}>{post.content}</p>{post.images?.map(image => <PrivateCommunityImage key={image.id} id={image.id} />)}<Link href={`/community/write?edit=${encodeURIComponent(post.id)}`}>수정</Link> <button disabled={busy} onClick={() => void removePost(post.id)}>삭제</button>{post.moderationStatus === "approved" && <> · <Link href={post.board === "free" ? `/community?post=${encodeURIComponent(post.id)}` : getTeamBoardHref(post.teamCode, post.id)}>게시판에서 확인</Link></>}</article>)}<h2>내 댓글 검사</h2>{comments.map(comment => <OwnComment key={`${comment.id}:${comment.revision}`} comment={comment} refresh={() => setTick(value => value + 1)} />)}</section>;
+  return <section className={styles.submissions} aria-labelledby="submissions-heading" aria-busy={loading || busy}>
+    <header className={styles.panelHeader}><div><p className="eyebrow">COMMUNITY</p><h1 id="submissions-heading">내 게시 검사 상태</h1><p>새 글과 댓글·수정본은 바로 게시되며 신고 또는 정기 검사로 사후 확인합니다. 검사 대기·오류만으로 공개를 중단하지 않습니다. 검사 완료 후 유해성 판정·이미지 검토·수동 검토 사유는 비공개 검토하며, 자동 검사 오류만 있으면 공개와 운영진 검토를 병행합니다. 별도 운영 제재나 비공개 부모 글은 유지됩니다.</p></div><button className="button button-secondary" disabled={loading || busy} onClick={() => setTick(value => value + 1)}>상태 새로고침</button></header>
+    {error && <p className={styles.error} role="alert">{error}</p>}
+    {loading && (posts.length > 0 || comments.length > 0) && <p className={styles.hint} role="status">검사 상태를 새로고침하고 있어요.</p>}
+    {loading && posts.length === 0 && comments.length === 0 ? <div className={styles.empty} role="status">내 게시글과 댓글을 불러오고 있어요.</div> : <>
+      <section aria-labelledby="own-posts-heading"><h2 id="own-posts-heading" className={styles.submissionListHeading}>내 게시글 검사</h2>
+        {!loading && !error && posts.length === 0 && <div className={styles.empty}><h3>등록한 게시글이 없어요</h3><p>새 글을 작성하면 이곳에서 검사 상태를 확인할 수 있어요.</p><Link className="button button-primary" href="/community/write">글쓰기</Link></div>}
+        {posts.map(post => <article className={styles.submissionCard} key={post.id}>
+          <header className={styles.submissionHeader}><h3>{post.title}</h3><span className={styles.submissionStatus} data-state={post.moderationStatus}>{moderationLabel[post.moderationStatus]}</span></header>
+          <p className={styles.metadata}>버전 {post.revision}</p><p className={styles.submissionText}>{post.content}</p>
+          {post.images && post.images.length > 0 && <div className={styles.attachments}>{post.images.map(image => <PrivateCommunityImage key={image.id} id={image.id} />)}</div>}
+          <div className={styles.submissionActions}><Link className="button button-primary" href={`/community/write?edit=${encodeURIComponent(post.id)}`}>수정</Link><button className={`button button-secondary ${styles.deleteButton}`} disabled={busy} onClick={() => void removePost(post.id)}>삭제</button>{["approved", "pending", "error"].includes(post.moderationStatus) && <Link className="button button-secondary" href={post.board === "free" ? `/community?post=${encodeURIComponent(post.id)}` : getTeamBoardHref(post.teamCode, post.id)}>게시판에서 확인</Link>}</div>
+        </article>)}
+      </section>
+      <section aria-labelledby="own-comments-heading"><h2 id="own-comments-heading" className={styles.submissionListHeading}>내 댓글 검사</h2>
+        {!loading && !error && comments.length === 0 && <div className={styles.empty}><h3>등록한 댓글이 없어요</h3><p>게시판에 댓글을 남기면 이곳에서 검사 상태를 확인할 수 있어요.</p><Link className="button button-secondary" href="/community">게시판으로</Link></div>}
+        {comments.map(comment => <OwnComment key={`${comment.id}:${comment.revision}`} comment={comment} refresh={() => setTick(value => value + 1)} />)}
+      </section>
+    </>}
+  </section>;
 }
 
 type Finding = { id: string; code: string; quote: string; reason: string; resolution: string };
